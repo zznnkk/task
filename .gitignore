@@ -1,0 +1,9 @@
+**/.venv/
+**/node_modules/
+**/.env
+**/*.zip
+**/*.xlsx
+**/*.xlsm
+**/*.xlsb
+**/*.csv
+**/temp/
