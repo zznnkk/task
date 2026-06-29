@@ -1,0 +1,210 @@
+"""
+NEIS 급식식단 수집기
+사용법: uv run find_meal.py <status_value>
+  예) uv run find_meal.py done20260626
+
+동작:
+  1) neis.school_info 에서 status != <status_value> 인 학교 하나 SELECT
+  2) 급식 API 호출 (페이징 자동)
+  3) row 배열 순회: MLSV_YMD 컬럼에 DDISH_NM 저장
+  4) 해당 학교 모든 row의 status 를 <status_value> 로 UPDATE
+  5) 완료 학교 없을 때까지 반복
+"""
+
+import os
+import sys
+import time
+import requests
+from datetime import date, timedelta
+from dotenv import load_dotenv
+import psycopg
+
+# ─── argument 체크 ────────────────────────────────────────
+if len(sys.argv) < 2 or not sys.argv[1].strip():
+    print("❌ argument 가 필요합니다.")
+    print("   사용법: uv run find_meal.py <status_value>")
+    sys.exit(1)
+
+STATUS = sys.argv[1].strip()
+
+# ─── 환경변수 ─────────────────────────────────────────────
+load_dotenv()
+KEY         = os.getenv("NEIS_KEY")
+PG_HOST     = os.getenv("PG_HOST")
+PG_PORT     = os.getenv("PG_PORT", "5432")
+PG_USER     = os.getenv("PG_USER")
+PG_PASSWORD = os.getenv("PG_PASSWORD")
+PG_DB       = os.getenv("PG_DB", "neis_school")
+
+# ─── 설정 ─────────────────────────────────────────────────
+BASE_URL  = "https://open.neis.go.kr/hub/mealServiceDietInfo"
+MLSV_FROM = "20260101"
+MLSV_TO   = "20260630"
+PAGE_SIZE = 200
+SLEEP_SEC = 0.1
+
+# 날짜 컬럼 리스트 (DDL과 동일하게 1/1 ~ 6/30)
+def make_date_cols(start_str: str, end_str: str) -> list[str]:
+    s = date(int(start_str[:4]), int(start_str[4:6]), int(start_str[6:8]))
+    e = date(int(end_str[:4]), int(end_str[4:6]), int(end_str[6:8]))
+    out = []
+    while s <= e:
+        out.append(s.strftime("%Y%m%d"))
+        s += timedelta(days=1)
+    return out
+
+DATE_COLS = make_date_cols(MLSV_FROM, MLSV_TO)  # 181개
+
+# UPSERT SQL 동적 생성 (큰따옴표 필수)
+_date_cols_quoted = ", ".join(f'"{d}"' for d in DATE_COLS)
+_date_placeholders = ", ".join(f'%({d})s' for d in DATE_COLS)
+_date_update_set = ", ".join(f'"{d}" = EXCLUDED."{d}"' for d in DATE_COLS)
+
+UPSERT_MEAL_SQL = f"""
+INSERT INTO neis.meal_info (
+    atpt_ofcdc_sc_code, atpt_ofcdc_sc_nm, sd_schul_code, schul_nm,
+    {_date_cols_quoted}
+) VALUES (
+    %(acode)s, %(aname)s, %(scode)s, %(sname)s,
+    {_date_placeholders}
+)
+ON CONFLICT (atpt_ofcdc_sc_code, sd_schul_code) DO UPDATE SET
+    atpt_ofcdc_sc_nm = EXCLUDED.atpt_ofcdc_sc_nm,
+    schul_nm         = EXCLUDED.schul_nm,
+    {_date_update_set},
+    updated_at       = clock_timestamp();
+"""
+
+UPDATE_STATUS_SQL = """
+UPDATE neis.school_info
+   SET status = %s
+ WHERE atpt_ofcdc_sc_code = %s
+   AND sd_schul_code      = %s;
+"""
+
+PICK_NEXT_SQL = """
+SELECT atpt_ofcdc_sc_code, atpt_ofcdc_sc_nm, sd_schul_code, schul_nm
+  FROM neis.school_info
+ WHERE status IS DISTINCT FROM %s
+ LIMIT 1;
+"""
+
+
+# ─── 급식 API 호출 (페이징 자동) ──────────────────────────
+def fetch_all_meals(acode: str, scode: str) -> list[dict]:
+    """학교 하나의 1~6월 급식 row 전체 반환"""
+    all_rows = []
+    page = 1
+    while True:
+        url = (
+            f"{BASE_URL}?Type=json&pSize={PAGE_SIZE}&pIndex={page}"
+            f"&KEY={KEY}"
+            f"&ATPT_OFCDC_SC_CODE={acode}&SD_SCHUL_CODE={scode}"
+            f"&MLSV_FROM_YMD={MLSV_FROM}&MLSV_TO_YMD={MLSV_TO}"
+        )
+        r = requests.get(url, timeout=30)
+        r.raise_for_status()
+        data = r.json()
+
+        # 데이터 없음 (INFO-200 등)
+        if "mealServiceDietInfo" not in data:
+            break
+
+        body = data["mealServiceDietInfo"]
+        result = body[0]["head"][1]["RESULT"]
+        if result["CODE"] != "INFO-000":
+            break
+
+        rows = body[1].get("row", []) if len(body) > 1 else []
+        all_rows.extend(rows)
+
+        # 마지막 페이지면 종료
+        if len(rows) < PAGE_SIZE:
+            break
+        page += 1
+        time.sleep(SLEEP_SEC)
+    return all_rows
+
+
+# ─── row 배열 → 날짜별 식단 dict ─────────────────────────
+def rows_to_day_dish(rows: list[dict]) -> dict:
+    """{'20260101': '[조식] ... | [중식] ...', ...} 형태로 변환"""
+    day_dish = {d: None for d in DATE_COLS}
+    for r in rows:
+        ymd = r.get("MLSV_YMD")
+        if ymd not in day_dish:
+            continue
+        dish    = (r.get("DDISH_NM") or "").strip()
+        meal_nm = (r.get("MMEAL_SC_NM") or "").strip()
+        if not dish:
+            continue
+        piece = f"[{meal_nm}] {dish}" if meal_nm else dish
+        day_dish[ymd] = piece if day_dish[ymd] is None else day_dish[ymd] + " | " + piece
+    return day_dish
+
+
+# ─── 메인 ─────────────────────────────────────────────────
+def main():
+    conn = psycopg.connect(
+        host=PG_HOST, port=PG_PORT,
+        user=PG_USER, password=PG_PASSWORD,
+        dbname=PG_DB,
+    )
+
+    try:
+        # 전체 학교 수 (고유 기준)
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT COUNT(DISTINCT (atpt_ofcdc_sc_code, sd_schul_code))
+                  FROM neis.school_info
+            """)
+            total = cur.fetchone()[0]
+            cur.execute("""
+                SELECT COUNT(DISTINCT (atpt_ofcdc_sc_code, sd_schul_code))
+                  FROM neis.school_info
+                 WHERE status = %s
+            """, (STATUS,))
+            done = cur.fetchone()[0]
+
+        print(f"▶ 시작: 대상 {total}개 / 이미 완료 {done}개 / status='{STATUS}'\n")
+
+        while True:
+            # 다음 학교 1개
+            with conn.cursor() as cur:
+                cur.execute(PICK_NEXT_SQL, (STATUS,))
+                pick = cur.fetchone()
+            if pick is None:
+                print("\n🎉 모든 학교 작업 완료!")
+                break
+
+            acode, aname, scode, sname = pick
+
+            # API 호출
+            try:
+                rows = fetch_all_meals(acode, scode)
+            except Exception as e:
+                print(f"❌ HTTP error: {sname} ({acode}/{scode}) - {e}")
+                time.sleep(2)
+                continue
+
+            day_dish = rows_to_day_dish(rows)
+
+            # UPSERT + status 갱신 (트랜잭션 1회)
+            params = {"acode": acode, "aname": aname, "scode": scode, "sname": sname}
+            params.update(day_dish)
+
+            with conn.cursor() as cur:
+                cur.execute(UPSERT_MEAL_SQL, params)
+                cur.execute(UPDATE_STATUS_SQL, (STATUS, acode, scode))
+            conn.commit()
+
+            done += 1
+            print(f"{done}/{total} 학교 식단 업데이트가 완료되었습니다. — {sname}")
+
+            time.sleep(SLEEP_SEC)
+    finally:
+        conn.close()
+
+
+if __name__ == "__main__":
+    main()

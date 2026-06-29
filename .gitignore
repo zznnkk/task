@@ -6,4 +6,5 @@
 **/*.xlsm
 **/*.xlsb
 **/*.csv
+**/*.db
 **/temp/
