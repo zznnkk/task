@@ -1,0 +1,2 @@
+- 00_get_filename.py: temp 폴더 아래의 jpg 또는 png 파일명을 읽어와서, `filename` 이라는 칼럼으로 `output.csv` 생성
+- 01_find_code.py: postgresql 안의 파일명들을, pyzbar, zxing-cpp 두개의 라이브러리로 이미지 안의 유통바코드를 읽어, 각각 그 결과를 다시 postgresql 에 저장

@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>대한민국 인구밀도 히트맵 (1km 격자)</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: 'Nanum Gothic', sans-serif; background: #1a1a2e; color: #eee; }
+  #map { width: 100vw; height: 100vh; }
+  #control-panel {
+    position: absolute; top: 10px; left: 50px; z-index: 1000;
+    background: rgba(20,20,40,0.92);
+    border: 1px solid #444;
+    border-radius: 10px;
+    padding: 14px 18px;
+    min-width: 340px;
+    max-width: 420px;
+    max-height: calc(100vh - 40px);
+    overflow-y: auto;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  }
+  #control-panel h2 { font-size: 14px; margin-bottom: 10px; color: #ffd700; letter-spacing: 1px; }
+  .steps-header {
+    display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+  }
+  .steps-header label { font-size: 12px; color: #aaa; }
+  .steps-header input[type=number] {
+    width: 50px; padding: 2px 6px; background: #2a2a4a; border: 1px solid #555;
+    border-radius: 4px; color: #fff; font-size: 12px;
+  }
+  #thresholds-container { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+  .threshold-row {
+    display: flex; align-items: center; gap: 6px; font-size: 11px;
+  }
+  .threshold-row .swatch {
+    width: 18px; height: 18px; border-radius: 3px; border: 1px solid #555; flex-shrink: 0;
+  }
+  .threshold-row label { color: #bbb; min-width: 70px; }
+  .threshold-row input[type=number] {
+    width: 70px; padding: 2px 6px; background: #2a2a4a; border: 1px solid #555;
+    border-radius: 4px; color: #fff; font-size: 11px;
+  }
+  #apply-btn {
+    width: 100%; padding: 6px; background: #b8860b; border: none;
+    border-radius: 5px; color: #fff; font-size: 12px; font-weight: bold;
+    cursor: pointer; margin-top: 4px; letter-spacing: 0.5px;
+    transition: background 0.2s;
+  }
+  #apply-btn:hover { background: #daa520; }
+  #legend {
+    position: absolute; bottom: 30px; right: 10px; z-index: 1000;
+    background: rgba(20,20,40,0.92);
+    border: 1px solid #444; border-radius: 8px;
+    padding: 10px 14px;
+    font-size: 11px;
+  }
+  #legend h4 { color: #ffd700; margin-bottom: 6px; font-size: 12px; }
+  .legend-row { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; }
+  .legend-swatch { width: 16px; height: 16px; border-radius: 2px; border: 1px solid #555; flex-shrink: 0; }
+  #stats {
+    position: absolute; bottom: 30px; left: 50px; z-index: 1000;
+    background: rgba(20,20,40,0);
+    border: 1px solid #444; border-radius: 8px;
+    padding: 8px 14px; font-size: 11px; color: #aaa;
+  }
+  #center-panel, #nth-panel {
+    margin-top: 12px;
+    border-top: 1px solid #444;
+    padding-top: 10px;
+  }
+  #center-panel h2, #nath-panel h2 {
+    font-size: 14px; margin-bottom: 8px; color: #ffd700; letter-spacing: 1px;
+  }
+  .center-radio-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 4px 6px; border-radius: 5px;
+    cursor: pointer; transition: background 0.15s;
+    font-size: 12px; color: #ccc;
+  }
+  .center-radio-row:hover { background: rgba(255,215,0,0.08); }
+  .center-radio-row input[type=radio] {
+    accent-color: #4caf50; cursor: pointer;
+  }
+  .center-radio-row.active {
+    background: rgba(76,175,80,0.15);
+    color: #4caf50;
+    font-weight: bold;
+  }
+  .pass-through {
+    pointer-events: none !important;
+  }
+  .leaflet-interactive { outline: none !important; }
+  #center-radio-container { display: flex; flex-wrap: wrap; }
+  #업종-panel {
+    margin-top: 12px;
+    border-top: 1px solid #444;
+    padding-top: 10px;
+  }
+  #업종-panel h2 { font-size: 14px; margin-bottom: 8px; color: #ffd700; letter-spacing: 1px; }
+  #업종-header {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 6px;
+    font-size: 11px; color: #aaa;
+  }
+  #업종-header button {
+    padding: 2px 8px; background: #2a2a4a; border: 1px solid #555;
+    border-radius: 3px; color: #ccc; font-size: 10px; cursor: pointer;
+  }
+  #업종-header button:hover { background: #3a3a6a; }
+  #업종-container {
+    display: flex; flex-direction: column; gap: 2px;
+    max-height: 300px; overflow-y: auto;
+  }
+  .업종-row {
+    display: flex; align-items: center; gap: 6px;
+    padding: 2px 4px; border-radius: 3px;
+    font-size: 11px; color: #ccc; cursor: pointer;
+    transition: background 0.1s;
+  }
+  .업종-row:hover { background: rgba(255,215,0,0.07); }
+  .업종-row input[type=checkbox] { accent-color: #ffd700; cursor: pointer; flex-shrink: 0; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div id="control-panel">
+  <h2>⚙️ 밀도 단계 설정</h2>
+  <div class="steps-header">
+    <label>단계 수:</label>
+    <input type="number" id="num-steps" min="2" max="20" value="10">
+    <button id="apply-btn" onclick="applySettings()">적용</button>
+  </div>
+  <div id="thresholds-container"></div>
+
+  <div id="center-panel">
+    <h2>📍 센터</h2>
+    <div id="center-radio-container"></div>
+  </div>
+  <div id="nth-panel">
+    <h2>🚚 N회전</h2>
+    <div id="nth">
+      <input type="checkbox" id="3rd-checkbox" checked><span>1~3회전가능</span>&nbsp;
+      <input type="checkbox" id="2nd-checkbox" checked><span>1~2회전만가능</span>&nbsp;
+      <input type="checkbox" id="1st-checkbox" checked><span>1회전만가능</span>&nbsp;
+    </div>
+  </div>
+  <div id="업종-panel">
+    <h2>🥣 업종</h2>
+    <div id="업종-header">
+      <button onclick="setAllUpjong(true)">전체선택</button>
+      <button onclick="setAllUpjong(false)">전체해제</button>
+      <span id="업종-count-label"></span>
+    </div>
+    <div id="업종-container"></div>
+  </div>
+</div>
+
+<div id="legend">
+  <h4>🗺️ 밀도 범례</h4>
+  <div id="legend-content"></div>
+</div>
+
+<div id="stats">
+  격자 수: <span id="stat-count">-</span> | 최대 밀도: <span id="stat-max">-</span>
+</div>
+
+<script>
+// 전역변수
+const $1st = document.getElementById('1st-checkbox');
+const $2nd = document.getElementById('2nd-checkbox');
+const $3rd = document.getElementById('3rd-checkbox');
+
+
+// =============================================
+// ★ 초기 설정 변수 (여기서 단계 수와 구간값 조절)
+// =============================================
+const CONFIG = {
+  numSteps: 10,   // 단계 수
+  // 각 단계의 하한값 (이상). 길이는 numSteps와 같아야 함.
+  // 1단계(흰색) ~ 마지막단계(진한 황토색)
+  thresholds: [1, 50, 100, 150, 200, 300, 400, 500, 600, 700]
+};
+// =============================================
+
+// 흰색 → 진한 황토색 팔레트 생성
+function generatePalette(n) {
+  // start: rgb(255,255,255) → end: rgb(101,55,0) 진한 황토색
+  const startR=255, startG=255, startB=255;
+  const endR=255,  endG=0,   endB=0;
+  const colors = [];
+  for (let i = 0; i < n; i++) {
+    const t = n === 1 ? 0 : i / (n - 1);
+    const r = Math.round(startR + (endR - startR) * t);
+    const g = Math.round(startG + (endG - startG) * t);
+    const b = Math.round(startB + (endB - startB) * t);
+    colors.push(`rgb(${r},${g},${b})`);
+  }
+  return colors;
+}
+
+function getColor(density, thresholds, palette) {
+  // 역순으로 체크 (높은 단계부터)
+  for (let i = thresholds.length - 1; i >= 0; i--) {
+    if (density >= thresholds[i]) return { color: palette[i], undermin: false };
+  }
+  return { color: palette[0], undermin: true };
+}
+
+// Leaflet 지도 초기화
+const map = L.map('map', { /*preferCanvas: true*/ }).setView([36.5, 127.8], 7);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; OpenStreetMap &copy; CartoDB',
+  subdomains: 'abcd', maxZoom: 19
+}).addTo(map);
+
+// GeoJSON 데이터 (인라인)
+const GEOJSON_EMD = {};
+const GEOJSON_SGG = {};
+const GEOJSON_SIDO = {};
+const JSON_CENTER = [{"name":"이천","lng":127.365146350326,"lat":37.2311841357446,"3rd":[11305,11215,11350,11320,11230,11440,11410,11200,11290,11170,11380,11110,11140,11260,41281,41285,41287,41310,41360,41630,41830,41670,41150,41500,41480,41650,51130,51730],"2nd":[41820,41250,51750,51110,51720],"1st":[41800,51150,51820,51170,51230,51210,51800,51830,51810,51770,51780,51190,51760,51790]},{"name":"수원","lng":127.097106160758,"lat":37.249577757722,"3rd":[41290,41610,41410,41113,41117,41111,41115,41173,41171,41463,41465,41461,41430,41450,44270,44200,44131,44133],"2nd":[44150,44210,44810],"1st":[44180,44760,44770,44790,44825,44800]},{"name":"수원2","lng":127.097106160758,"lat":37.249577757722,"3rd":[11680,11650,11710,41135,41131,41133,41273,41271],"2nd":[11620],"1st":[11740,11590,11560]},{"name":"동탄","lng":127.0988303,"lat":37.1587347,"3rd":[11500,11530,11545,11470,41210,41570,41194,41196,41192,41390,28245,28200,28140,28177,28237,28260,28185,28720,28110],"2nd":[30170,30200,36110],"1st":[30230,30110,30140,28710,44250,44710,44230]},{"name":"동탄2","lng":127.0988303,"lat":37.1587347,"3rd":[41550,41370,41220,41597,41591,41595,41593,28720,43760,43770,43745,43750,43111,43112,43114,43113,43130],"2nd":[43730,43150],"1st":[43800,43720,43740]},{"name":"용인","lng":127.100191418641,"lat":37.3366947773704,"3rd":[11650,11740,41131,41133,41135,41610,41461,41463,41465,41111,41117,41115,41113,41597,41595,41593,41370,41591],"2nd":[11680,11710],"1st":[41450,41500,41220,41550]},{"name":"남양주","lng":127.203837868357,"lat":37.7245486776568,"3rd":[11305,11215,11350,11320,11230,11200,11290,11140,11260,41310,41360,41630,41150,41650],"2nd":[11170,41250],"1st":[11110,41820,41830,41800,51780]},{"name":"안양","lng":126.891226071967,"lat":37.4085681921033,"3rd":[11500,11620,11530,11545,11440,11470,11560,41290,41210,41410,41194,41192,41390,41273,41271,41173,41171,41430,28245,28200,28177,28237,28185],"2nd":[11590,11410,41196,28140],"1st":[11380,41281,41285,41287,41570,41480,28260,28110]},{"name":"대전","lng":127.388237486741,"lat":36.4310642519549,"3rd":[30110,30140,30170,30200,30230,36110,44250,44150,44710,44230,44760,43730,43740,43720,43111,43112,43113,43114,43750,43745],"2nd":[44131,44133,44200,44810,44790,44770],"1st":[44270,44210,44825,44800,44180,43770,43130]},{"name":"광주","lng":126.816394720527,"lat":35.2144643711972,"3rd":[29200,29155,29110,29170,29140,46720,46730,46170,46710,46110,46840,46780,46150,46910,46870,46830,46880,46860,46790,52790,52210,52190,52800,52770,52750,52113,52111,52180],"2nd":[46230,52130,52710,52140],"1st":[46810,46770,46130,46890,46800,46900,46820,52730,52740,52720]},{"name":"대구","lng":128.532730741229,"lat":35.8711622331557,"3rd":[27720,27200,27290,27710,27140,27230,27170,27260,27110,47290,47830,47190,47850],"2nd":[47150,47230],"1st":[47280,47170,47210,47111,47113]},{"name":"부산","lng":129.0541563098,"lat":35.1276523897048,"3rd":[48250,48270,48330,48127,48123,48121,48129,26440,26410,26710,26290,26170,26260,26230,26320,26530,26380,26140,26500,26470,26200,26110,26350],"2nd":[48125,48730,31140,31710],"1st":[48310,48820,48240,48170,48220,31170,31200,31110]},{"name":"장성","lng":126.753895775357,"lat":35.3201552830792,"3rd":[29200,29155,29110,29170,29140,46720,46730,46170,46710,46110,46840,46910,46870,46830,46880,46860,46790,52790,52130,52210,52190,52800,52770,52710,52750,52113,52111,52180],"2nd":[46230,46780,46150,52140],"1st":[46810,46770,46130,46890,46800,46900,46820,52730,52740,52720]},{"name":"양산","lng":129.015548974013,"lat":35.3855419538722,"3rd":[31140,31170,31200,31710,31110,26440,26410,26710,26290,26170,26260,26230,26320,26530,26380,26140,26500,26470,26200,26110,26350,27200,27290,27710,27140,27230,27170,27260,27110,47290,47130,47230,47850,47111,48310,48820,48250,48270,48330,48720,48170,48740,48125,48127,48123,48121,48129,48730],"2nd":[27720,47830,47190,47840,47113,48860,48220],"1st":[47150,47280,47920,47250,47170,47770,47760,47210,47900,48880,48840,48240,48850,48870,48890,47820,47730,47750,47930]}];
+const DATA = {"11110101":{"emd_nm":"서울특별시 종로구 청운동","area_km2":"0.792617903","기타주점/포장마차":"1","꼬치구이전문점":"0","민속주점":"0","와인전문점":"0","이자까야":"0","전전문점":"0","짝태/노가리전문점":"0","호프/맥주":"2","기타동남아식전문점":"0","쌀국수전문점":"0","카레전문점":"0","떡/한과전문점":"0","김밥전문점":"0","떡볶이전문점":"0","만두전문점":"0","어묵전문점":"0","종합분식":"1","튀김전문점":"0","고기뷔페":"0","웨딩뷔페":"0","일반뷔페":"0","한식뷔페":"0","해물뷔페":"0","리조또전문점":"0","바베큐전문점":"0","볶음밥전문점":"0","스테이크전문점":"0","스파게티전문점":"0","종합양식":"1","패밀리레스토랑":"0","나이트클럽/카바레":"0","룸살롱/단란주점":"0","빠/카페":"0","일반유흥주점":"1","야식집/배달전문점":"0","간이일식":"0","덮밥/가정식전문점":"0","돈가스전문점":"0","라멘전문점":"0","일식전문점":"0","참치전문점":"0","초밥전문점":"0","고로케전문점":"0","꽈배기전문점":"0","도너츠전문점":"0","마카롱전문점":"0","베이글전문점":"0","붕어빵전문점":"0","식빵전문점":"0","와플/파이전문점":"0","제과점":"1","찐빵전문점":"0","츄러스전문점":"0","케이크전문점":"0","쿠키전문점":"0","타르트전문점":"0","호두과자전문점":"0","호떡전문점":"0","마라/샹궈/훠궈전문점":"0","일반중국음식전문점":"1","짬뽕전문점":"0","탄탄면전문점":"0","탕수육전문점":"0","이동음식업":"0","출장음식업":"0","과일/허브/홍차전문점":"0","밀크티/버블티전문점":"0","빙수전문점":"0","생과일주스전문점":"0","스무디/쉐이크전문점":"0","요거트아이스크림전문점":"0","일반아이스크림전문점":"0","전통찻집/인삼찻집":"0","커피전문점":"4","도시락전문점":"0","밥버거전문점":"0","브런치전문점":"0","샌드위치전문점":"0","샐러드전문점":"0","치킨전문점":"0","컵밥전문점":"0","타코/부리또전문점":"0","토스트전문점":"0","피자전문점":"0","핫도그전문점":"0","햄버거전문점":"0","갈매기살전문점":"0","갈비찜전문점":"0","갈비탕전문점":"0","갈치전문점":"0","게장전문점":"0","고등어전문점":"0","곰장어전문점":"0","곱창/양구이전문점":"0","국밥전문점":"0","국수/칼국수전문점":"0","굴요리전문점":"0","기사식당":"0","기타고기요리전문점":"0","기타수산물음식전문점":"0","김치찜/찌개전문점":"0","낙지/쭈꾸미전문점":"0","냉면전문점":"0","닭갈비전문점":"0","닭강정전문점":"0","닭발/닭내장전문점":"0","닭볶음탕전문점":"0","돼지갈비전문점":"0","된장찌개전문점":"0","두루치기전문점":"0","두부요리전문점":"0","막창전문점":"0","문어전문점":"0","물회전문점":"0","민물장어전문점":"0","바닷가재/게요리전문점":"0","버섯전문점":"0","보리밥전문점":"0","보신탕전문점":"0","보쌈전문점":"0","복요리전문점":"0","부대찌개전문점":"0","북어국전문점":"0","불고기전문점":"0","불닭전문점":"0","비빔밥전문점":"0","삼겹살/구이전문점":"0","삼계탕/백숙전문점":"0","생선구이/찜전문점":"0","생선탕전문점":"0","샤브샤브전문점":"0","설렁탕/곰탕전문점":"0","소고기구이전문점":"0","수제비전문점":"0","순대전문점":"0","순두부전문점":"0","쌈밥전문점":"0","아구찜/탕전문점":"0","양고기/양꼬치전문점":"0","연어전문점":"0","오리고기전문점":"0","오징어전문점":"0","옻닭전문점":"0","우동전문점":"0","육개장전문점":"0","육회전문점":"0","일반한식/백반":"4","조개구이/찜전문점":"0","족발전문점":"0","죽전문점":"0","찜닭전문점":"0","추어탕전문점":"1","콩나물국밥전문점":"0","한정식전문점":"0","해물찜/탕전문점":"0","해장국/감자탕":"0","홍어전문점":"0","황태전문점":"0","횟집":"0","위탁급식/케이터링":"0","휴게소":"0"}};
+
+let emdLayer = null;
+let sggLayer = null;
+let sidoLayer = null;
+let currentThresholds = [...CONFIG.thresholds];
+let currentPalette = generatePalette(CONFIG.numSteps);
+
+// =============================================
+// 센터 레이어 관련 변수
+// =============================================
+let centerMarker = null;       // 녹색 점 (CircleMarker)
+let centerSggLayer = null;     // 시군구 컬러 레이어
+let activeCenterIdx = null;    // 현재 선택된 센터 인덱스
+
+// 센터 관련 레이어 모두 제거
+function clearCenterLayers() {
+  if (centerMarker) { map.removeLayer(centerMarker); centerMarker = null; }
+  if (centerSggLayer) { map.removeLayer(centerSggLayer); centerSggLayer = null; }
+}
+
+// sgg_cd 로 SGG feature 찾기 (문자열/숫자 모두 대응)
+function getSggFeaturesByCodes(codes) {
+  if (!GEOJSON_SGG || !GEOJSON_SGG.features) return [];
+  const codeSet = new Set(codes.map(c => String(c)));
+  return GEOJSON_SGG.features.filter(f => {
+    const cd = String(f.properties.sgg_cd || f.properties.SGG_CD || '');
+    return codeSet.has(cd);
+  });
+}
+
+// 센터 선택 처리
+function selectCenter(idx) {
+  // 같은 버튼 재클릭 → 해제
+  // if (activeCenterIdx === idx) {
+  //   activeCenterIdx = null;
+  //   clearCenterLayers();
+  //   document.querySelectorAll('.center-radio-row').forEach(r => r.classList.remove('active'));
+  //   // 라디오 버튼 해제 (name 으로 그룹 접근)
+  //   const radios = document.querySelectorAll('input[name="center-radio"]');
+  //   radios.forEach(r => r.checked = false);
+  //   return;
+  // }
+
+  activeCenterIdx = idx;
+  clearCenterLayers();
+
+  const center = JSON_CENTER[idx];
+
+  // 행 활성 스타일
+  document.querySelectorAll('.center-radio-row').forEach((r, i) => {
+    // r.classList.toggle('active', i === idx);
+    i === Number(idx) ? r.classList.add('active') : r.classList.remove('active');
+  });
+
+  // 1) 녹색 점 (CircleMarker) — interactive: false 로 하위 레이어 클릭 방해 안 함
+  centerMarker = L.circleMarker([center.lat, center.lng], {
+    radius: 10,
+    fillColor: '#4caf50',
+    fillOpacity: 0.9,
+    color: '#2e7d32',
+    weight: 2,
+    interactive: false,
+    pane: 'markerPane'
+  }).addTo(map);
+
+  // 2) 시군구 컬러 레이어
+  // 3rd → 연한 색, 2nd → 중간 색, 1st → 진한 색
+  const tierConfig = [
+    { codes: center['3rd'], fillColor: '#99dd9a', fillOpacity: ($3rd.checked) ? 0.7 : 0 },
+    { codes: center['2nd'], fillColor: '#99dd9a', fillOpacity: ($2nd.checked) ? 0.7 : 0 },
+    { codes: center['1st'], fillColor: '#99dd9a', fillOpacity: ($1st.checked) ? 0.7 : 0 },
+    
+  ];
+
+  const coloredFeatures = [];
+  tierConfig.forEach(({ codes, fillColor, fillOpacity }) => {
+    const features = getSggFeaturesByCodes(codes);
+    features.forEach(f => coloredFeatures.push({ feature: f, fillColor, fillOpacity }));
+  });
+
+  if (coloredFeatures.length > 0) {
+    // GeoJSON FeatureCollection 구성
+    const fc = {
+      type: 'FeatureCollection',
+      features: coloredFeatures.map(({ feature, fillColor, fillOpacity }) => ({
+        ...feature,
+        properties: { ...feature.properties, _fillColor: fillColor, _fillOpacity: fillOpacity }
+      }))
+    };
+
+    centerSggLayer = L.geoJSON(fc, {
+      style: function(feature) {
+        return {
+          fillColor: feature.properties._fillColor,
+          fillOpacity: feature.properties._fillOpacity,
+          color: "rgb(0, 0, 255)",
+          weight: 1,
+          opacity: 1,
+          interactive: false,   // ← EMD 팝업 등 하위 레이어 이벤트 방해 안 함
+        };
+      },
+      interactive: false,
+      className: 'pass-through',
+    }).addTo(map);
+
+    // sggLayer / sidoLayer 위에 올라가되 emdLayer 이벤트는 유지
+    // (interactive: false 이므로 클릭·호버 이벤트 모두 통과)
+  }
+
+  // 3) 지도 이동
+  // map.setView([center.lat, center.lng], 9, { animate: true });
+}
+
+// N회전 체크박스 빌드
+function buildNth() {
+  $1st.addEventListener('change', (e) => {
+    // e.target.checked
+    let a = document.querySelector('label.center-radio-row.active');
+    if (!a) return;
+
+    let idx = a.querySelector("input").value;
+    console.log(idx);
+    selectCenter(idx);
+  });
+  $2nd.addEventListener('change', (e) => {
+    let a = document.querySelector('label.center-radio-row.active');
+    if (!a) return;
+
+    let idx = a.querySelector("input").value;
+    console.log(idx);
+    selectCenter(idx);
+  });
+  $3rd.addEventListener('change', (e) => {
+    let a = document.querySelector('label.center-radio-row.active');
+    if (!a) return;
+
+    let idx = a.querySelector("input").value;
+    console.log(idx);
+    selectCenter(idx);
+  });
+}
+
+// 센터 라디오 버튼 빌드
+function buildCenterPanel() {
+  const container = document.getElementById('center-radio-container');
+  container.innerHTML = '';
+  JSON_CENTER.forEach((center, idx) => {
+    const row = document.createElement('label');
+    row.className = 'center-radio-row';
+    row.innerHTML = `
+      <input type="radio" name="center-radio" value="${idx}">
+      <span>${center.name}</span>
+    `;
+    row.querySelector('input').addEventListener('change', () => selectCenter(idx));
+    // label 클릭 시 이미 선택된 경우도 처리
+    row.addEventListener('click', (e) => {
+      if (e.target.tagName !== 'INPUT' && activeCenterIdx === idx) {
+        e.preventDefault();
+        selectCenter(idx); // 해제
+      }
+    });
+    container.appendChild(row);
+  });
+}
+
+
+function getCheckedUpjong() {
+  const checks = document.querySelectorAll('.업종-checkbox:checked');
+  return Array.from(checks).map(c => c.value);
+}
+
+function computeDensity(emd_cd) {
+  const row = DATA[emd_cd];
+  if (!row) return 0;
+  const area = parseFloat(row['area_km2']) || 0;
+  if (area === 0) return 0;
+  const checkedKeys = getCheckedUpjong();
+  let sum = 0;
+  for (const k of checkedKeys) {
+    sum += parseInt(row[k] || 0, 10);
+  }
+  return sum / area;
+}
+
+function buildLayer(thresholds, palette) {
+  if (emdLayer) map.removeLayer(emdLayer);
+
+  emdLayer = L.geoJSON(GEOJSON_EMD, {
+    style: function(feature) {
+      const emd_cd = String(feature.properties.emd_cd || '');
+      const d = computeDensity(emd_cd);
+      const { color, undermin } = getColor(d, thresholds, palette);
+      return {
+        fillColor: color,
+        fillOpacity: (undermin) ? 0 : 0.8,
+        color: color,
+        weight: 1,
+        opacity: 1
+      };
+    },
+    onEachFeature: function(feature, layer) {
+      layer.on('click', function(e) {
+        const emd_cd = String(feature.properties.emd_cd || '');
+        const row = DATA[emd_cd];
+        const emd_nm = row ? row['emd_nm'] : emd_cd;
+        const d = computeDensity(emd_cd).toFixed(2);
+        L.popup()
+          .setLatLng(e.latlng)
+          .setContent(`<b>${emd_nm}</b><br>밀도: <b>${d}</b>`)
+          .openOn(map);
+      });
+    }
+  }).addTo(map);
+
+  sggLayer = L.geoJSON(GEOJSON_SGG, {
+    style: function(feature) {
+      return {
+        fillColor: `rgb(0, 0, 0)`,
+        fillOpacity: 0,
+        color: `rgb(0, 0, 255)`,
+        weight: 1,
+        opacity: 1,
+      };
+    },
+    interactive: false,
+  }).addTo(map);
+
+  sidoLayer = L.geoJSON(GEOJSON_SIDO, {
+    style: function(feature) {
+      return {
+        fillColor: `rgb(0, 0, 0)`,
+        fillOpacity: 0,
+        color: `rgb(0, 0, 255)`,
+        weight: 3,
+        opacity: 1,
+      };
+    },
+    interactive: false,
+  }).addTo(map);
+
+  // 통계
+  if (GEOJSON_EMD.features) {
+    document.getElementById('stat-count').textContent = GEOJSON_EMD.features.length.toLocaleString();
+    const maxD = Math.max(...GEOJSON_EMD.features.map(f => computeDensity(String(f.properties.emd_cd || ''))));
+    document.getElementById('stat-max').textContent = isFinite(maxD) ? maxD.toFixed(1) : '-';
+  }
+}
+
+function buildLegend(thresholds, palette) {
+  const container = document.getElementById('legend-content');
+  container.innerHTML = '';
+  for (let i = 0; i < thresholds.length; i++) {
+    const nextVal = i < thresholds.length - 1 ? thresholds[i+1] - 1 : '~';
+    const row = document.createElement('div');
+    row.className = 'legend-row';
+    row.innerHTML = `
+      <div class="legend-swatch" style="background:${palette[i]}"></div>
+      <span>${thresholds[i]}${nextVal !== '~' ? ' ~ ' + nextVal : ' 이상'}</span>
+    `;
+    container.appendChild(row);
+  }
+}
+
+function buildControls(thresholds) {
+  const numSteps = thresholds.length;
+  document.getElementById('num-steps').value = numSteps;
+  const palette = generatePalette(numSteps);
+  const container = document.getElementById('thresholds-container');
+  container.innerHTML = '';
+  for (let i = 0; i < numSteps; i++) {
+    const row = document.createElement('div');
+    row.className = 'threshold-row';
+    row.innerHTML = `
+      <div class="swatch" style="background:${palette[i]}"></div>
+      <label>${i+1}단계 (이상):</label>
+      <input type="number" id="thr-${i}" value="${thresholds[i]}" min="0">
+    `;
+    container.appendChild(row);
+  }
+}
+
+function applySettings() {
+  const numSteps = parseInt(document.getElementById('num-steps').value);
+  let thresholds = [];
+
+  // 현재 입력값 읽기
+  const existingInputs = document.querySelectorAll('[id^="thr-"]');
+  for (let i = 0; i < existingInputs.length; i++) {
+    thresholds.push(parseInt(existingInputs[i].value) || 0);
+  }
+
+  // 단계 수가 바뀐 경우 자동 보간
+  if (numSteps !== thresholds.length) {
+    const oldMax = thresholds[thresholds.length - 1] || 800;
+    const oldMin = thresholds[0] || 1;
+    thresholds = [];
+    for (let i = 0; i < numSteps; i++) {
+      const t = numSteps === 1 ? 0 : i / (numSteps - 1);
+      thresholds.push(Math.round(oldMin + (oldMax - oldMin) * t));
+    }
+  }
+
+  currentThresholds = thresholds;
+  currentPalette = generatePalette(numSteps);
+
+  buildControls(thresholds);
+  buildLayer(currentThresholds, currentPalette);
+  buildLegend(currentThresholds, currentPalette);
+}
+
+// 업종 목록 추출 (DATA 첫 번째 row 기준)
+function getUpjongList() {
+  const row = Object.values(DATA)[0];
+  return Object.keys(row).filter(k => k !== 'emd_nm' && k !== 'area_km2');
+}
+
+function updateUpjongCountLabel() {
+  const total = document.querySelectorAll('.업종-checkbox').length;
+  const checked = document.querySelectorAll('.업종-checkbox:checked').length;
+  document.getElementById('업종-count-label').textContent = `${checked}/${total}`;
+}
+
+function setAllUpjong(checked) {
+  document.querySelectorAll('.업종-checkbox').forEach(cb => cb.checked = checked);
+  updateUpjongCountLabel();
+  buildLayer(currentThresholds, currentPalette);
+}
+
+function buildUpjong() {
+  const container = document.getElementById('업종-container');
+  container.innerHTML = '';
+  const list = getUpjongList();
+  list.forEach(name => {
+    const label = document.createElement('label');
+    label.className = '업종-row';
+    label.innerHTML = `
+      <input type="checkbox" class="업종-checkbox" value="${name}" checked>
+      <span>${name}</span>
+    `;
+    label.querySelector('input').addEventListener('change', () => {
+      updateUpjongCountLabel();
+      buildLayer(currentThresholds, currentPalette);
+    });
+    container.appendChild(label);
+  });
+  updateUpjongCountLabel();
+}
+
+// 초기 렌더링
+buildControls(CONFIG.thresholds);
+buildLayer(currentThresholds, currentPalette);
+buildLegend(currentThresholds, currentPalette);
+buildCenterPanel();
+buildNth();
+buildUpjong();
+
+// 단계 수 변경시 즉시 컨트롤 재생성
+document.getElementById('num-steps').addEventListener('change', function() {
+  const n = parseInt(this.value);
+  if (n < 2 || n > 20) return;
+  const newThresholds = [];
+  const oldMin = currentThresholds[0];
+  const oldMax = currentThresholds[currentThresholds.length - 1];
+  for (let i = 0; i < n; i++) {
+    const t = n === 1 ? 0 : i / (n - 1);
+    newThresholds.push(Math.round(oldMin + (oldMax - oldMin) * t));
+  }
+  buildControls(newThresholds);
+});
+</script>
+</body>
+</html>
