@@ -1,0 +1,24 @@
+[package]
+name = "my-browser-app"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "MyBrowserApp"
+path = "src/main.rs"
+
+[dependencies]
+# 버전은 예시입니다. cargo add 로 최신 버전을 다시 확인하고,
+# 특히 wry / tao 는 API가 자주 바뀌므로 build_as_child / with_ipc_handler
+# 시그니처가 맞는지 컴파일 에러로 재확인 필요.
+wry = "0.55"
+tao = "0.35"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "z"     # 크기 최적화 (속도가 더 중요하면 "3"으로 변경)
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

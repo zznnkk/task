@@ -122,8 +122,6 @@ async function baeminSearchCrawl({ browserView, searchTerm, isCancelled }) {
 
       searchButton.click();
       return true;
-
-      return true;
     })();
   `);
 
