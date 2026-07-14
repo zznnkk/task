@@ -1,3 +1,4 @@
+const fs = require("fs");
 const path = require("path");
 const {
   app,
@@ -7,7 +8,46 @@ const {
   Menu
 } = require("electron");
 
-const buttons = require("./src/buttons.js");
+// src/buttons 폴더 안의 각 .js 파일이 버튼 하나(= { id, name, crawl })를 export함.
+// _로 시작하는 파일(_shared.js 등)은 버튼이 아니라 공통 헬퍼이므로 로드에서 제외.
+function loadButtons() {
+  const dir = path.join(__dirname, "src", "buttons");
+
+  const buttonFiles = fs.readdirSync(dir)
+    .filter((file) => file.endsWith(".js") && !file.startsWith("_"))
+    .sort(); // 파일명 순서 = 버튼 노출 순서
+
+  const loaded = [];
+  const seenIds = new Set();
+
+  for (const file of buttonFiles) {
+    let button;
+
+    try {
+      button = require(path.join(dir, file));
+    } catch (err) {
+      console.error(`[buttons] ${file} 로드 실패:`, err);
+      continue;
+    }
+
+    if (!button || !button.id || !button.name || typeof button.crawl !== "function") {
+      console.error(`[buttons] ${file}은 { id, name, crawl } 형식이 아니라서 건너뜀`);
+      continue;
+    }
+
+    if (seenIds.has(button.id)) {
+      console.error(`[buttons] id "${button.id}"가 중복됨 (${file}) - 건너뜀`);
+      continue;
+    }
+
+    seenIds.add(button.id);
+    loaded.push(button);
+  }
+
+  return loaded;
+}
+
+const buttons = loadButtons();
 
 let mainWindow;
 let browserView;
@@ -107,6 +147,11 @@ function createWindow() {
 
   browserView = new BrowserView();
   overlayView = new BrowserView();
+
+  // ↓ 추가
+  browserView.webContents.setUserAgent(
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+  );
 
   overlayView.setBackgroundColor("#00000000");
   overlayView.webContents.loadFile(
