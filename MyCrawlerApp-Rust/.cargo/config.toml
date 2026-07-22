@@ -1,4 +1,0 @@
-# MSVC CRT를 정적으로 링크 -> vcruntime*.dll 배포/설치 없이 exe 하나로 실행 가능.
-# (WebView2 런타임 자체는 요구사항대로 사용자 Win11 기본 탑재분을 그대로 사용 - 여기 포함 안 함)
-[target.x86_64-pc-windows-msvc]
-rustflags = ["-C", "target-feature=+crt-static"]

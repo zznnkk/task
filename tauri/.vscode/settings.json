@@ -1,0 +1,8 @@
+{
+  // VS Code 전반의 인라인 타입 힌트 끄기
+  "editor.inlayHints.enabled": "off",
+  
+  // (선택) rust-analyzer 전용 힌트 설정 끄기
+  "rust-analyzer.inlayHints.typeHints.enable": false,
+  "rust-analyzer.inlayHints.chainingHints.enable": false
+}

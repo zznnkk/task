@@ -1,7 +1,0 @@
-node_modules/
-target/
-
-**/*.rs.bk
-
-.env
-.env.*
