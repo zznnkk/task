@@ -1,1 +1,1 @@
-{}
+{"default":{"identifier":"default","description":"기본 권한: 창/웹뷰 관리 + 이벤트 리슨","local":true,"windows":["main"],"webviews":["a","b"],"permissions":["core:default","core:event:default","core:event:allow-listen"]}}

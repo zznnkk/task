@@ -1,10 +1,34 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <meta charset="UTF-8" />
-    <title>webview A</title>
+  <meta charset="UTF-8" />
+  <title>A</title>
+  <style>
+    body { margin: 0; padding: 16px; background: #5aa0ff; color: white; font-family: sans-serif; box-sizing: border-box; height: 100vh; }
+    button { font-size: 16px; padding: 8px 16px; cursor: pointer; }
+    textarea { width: 100%; height: 200px; margin-top: 12px; font-family: monospace; }
+  </style>
 </head>
-<body style="background-color: #eee;">
-    <h1>안녕하세요, webview A 입니다.</h1>
+<body>
+  <h1>Pane A</h1>
+  <button id="sendBtn">B로 보내기</button>
+  <textarea id="log" readonly></textarea>
+
+  <script>
+    let seq = 0;
+
+    document.getElementById('sendBtn').addEventListener('click', () => {
+      seq += 1;
+      const message = {
+        sender: 'a',
+        receiver: 'b',
+        event: 'ping',
+        payload: { seq, sentAt: new Date().toISOString() }
+      };
+
+      window.api.send(message);
+      document.getElementById('log').value = JSON.stringify(message, null, 2);
+    });
+  </script>
 </body>
 </html>
