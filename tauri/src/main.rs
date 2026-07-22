@@ -1,6 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use tauri::{LogicalPosition, LogicalSize, Manager, WebviewBuilder, WebviewUrl, Window, Runtime};
+use std::sync::{Arc, Mutex};
+use tauri::{
+    webview::PageLoadEvent, LogicalPosition, LogicalSize, Manager, WebviewBuilder, WebviewUrl,
+    Window, Runtime,
+};
 
 // ── 설정값 ──────────────────────────────────────────────
 const WINDOW_TITLE: &str = "Dual Pane";
@@ -10,6 +14,8 @@ const WINDOW_HEIGHT: f64 = 800.0;
 const WEBVIEW_A_URL: &str = "webviewA/index.html";
 const WEBVIEW_B_URL: &str = "webviewB/index.html";
 
+const TOTAL_WEBVIEWS: u8 = 2; // A, B 둘 다 로드되면 show()
+
 #[derive(Clone, Copy)]
 struct Rect {
     x: f64,
@@ -18,26 +24,9 @@ struct Rect {
     height: f64,
 }
 
-/// 여기서 A, B의 배치를 자유롭게 정의합니다.
-/// 창 크기(ww, wh)를 받아서 각 웹뷰의 x/y/width/height를 계산.
 fn compute_layout(ww: f64, wh: f64) -> (Rect, Rect) {
-    let a = Rect { x: 0.0, y: 0.0, width: ww * 0.2, height: wh };
-    let b = Rect { x: ww * 0.2, y: 0.0, width: ww * 0.8, height: wh };
-
-    
-    // ── 예시 1: 좌우 배치 (반반) ──
-    // let a = Rect { x: 0.0, y: 0.0, width: ww * 0.5, height: wh };
-    // let b = Rect { x: ww * 0.5, y: 0.0, width: ww * 0.5, height: wh };
-
-    // ── 예시 2: 상하 배치로 바꾸려면 위 두 줄 대신 ──
-    // let a = Rect { x: 0.0, y: 0.0, width: ww, height: wh * 0.5 };
-    // let b = Rect { x: 0.0, y: wh * 0.5, width: ww, height: wh * 0.5 };
-
-    // ── 예시 3: A는 300px 고정, B가 나머지 전부 (좌우) ──
-    // let fixed_a_width = 300.0;
-    // let a = Rect { x: 0.0, y: 0.0, width: fixed_a_width, height: wh };
-    // let b = Rect { x: fixed_a_width, y: 0.0, width: ww - fixed_a_width, height: wh };
-
+    let a = Rect { x: 0.0, y: 0.0, width: ww * 0.5, height: wh };
+    let b = Rect { x: ww * 0.5, y: 0.0, width: ww * 0.5, height: wh };
     (a, b)
 }
 // ──────────────────────────────────────────────────────
@@ -64,21 +53,48 @@ fn relayout<R: Runtime>(window: &Window<R>) -> tauri::Result<()> {
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
+            // 1. 창을 처음부터 숨긴 상태로 생성
             let window = tauri::window::WindowBuilder::new(app, "main")
                 .title(WINDOW_TITLE)
                 .inner_size(WINDOW_WIDTH, WINDOW_HEIGHT)
+                .visible(false)
                 .build()?;
 
             let (a, b) = compute_layout(WINDOW_WIDTH, WINDOW_HEIGHT);
 
-            let webview_a = WebviewBuilder::new("a", WebviewUrl::App(WEBVIEW_A_URL.into()));
+            // 2. 로드 완료 카운터 (A, B 둘 다 끝나야 show)
+            let loaded_count = Arc::new(Mutex::new(0u8));
+
+            let window_for_a = window.clone();
+            let count_for_a = loaded_count.clone();
+            let webview_a = WebviewBuilder::new("a", WebviewUrl::App(WEBVIEW_A_URL.into()))
+                .on_page_load(move |_webview, payload| {
+                    if let PageLoadEvent::Finished = payload.event() {
+                        let mut count = count_for_a.lock().unwrap();
+                        *count += 1;
+                        if *count >= TOTAL_WEBVIEWS {
+                            let _ = window_for_a.show();
+                        }
+                    }
+                });
             window.add_child(
                 webview_a,
                 LogicalPosition::new(a.x, a.y),
                 LogicalSize::new(a.width, a.height),
             )?;
 
-            let webview_b = WebviewBuilder::new("b", WebviewUrl::App(WEBVIEW_B_URL.into()));
+            let window_for_b = window.clone();
+            let count_for_b = loaded_count.clone();
+            let webview_b = WebviewBuilder::new("b", WebviewUrl::App(WEBVIEW_B_URL.into()))
+                .on_page_load(move |_webview, payload| {
+                    if let PageLoadEvent::Finished = payload.event() {
+                        let mut count = count_for_b.lock().unwrap();
+                        *count += 1;
+                        if *count >= TOTAL_WEBVIEWS {
+                            let _ = window_for_b.show();
+                        }
+                    }
+                });
             window.add_child(
                 webview_b,
                 LogicalPosition::new(b.x, b.y),
