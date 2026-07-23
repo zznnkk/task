@@ -8,6 +8,28 @@ const {
   Menu
 } = require("electron");
 
+
+// min~max(ms) 사이 랜덤 시간만큼 대기. 100ms 단위로 취소 여부를 확인해서,
+// 대기 중에 취소 버튼을 눌러도 즉시 반응하게 한다.
+function randomDelay(minMs, maxMs, isCancelledFn) {
+  const target = minMs + Math.random() * (maxMs - minMs);
+  const start = Date.now();
+
+  return new Promise((resolve) => {
+    const check = () => {
+      if (isCancelledFn() || Date.now() - start >= target) {
+        resolve();
+        return;
+      }
+
+      setTimeout(check, 100);
+    };
+
+    check();
+  });
+}
+
+
 // src/buttons 폴더 안의 각 .js 파일이 버튼 하나(= { id, name, crawl })를 export함.
 // _로 시작하는 파일(_shared.js 등)은 버튼이 아니라 공통 헬퍼이므로 로드에서 제외.
 function loadButtons() {
@@ -227,6 +249,11 @@ ipcMain.handle("crawl:start", async (event, id, searchTerms) => {
         rowIndex,
         text: `${target.name}|${value}`
       });
+    }
+
+    // ↓ 여기 추가: 다음 검색어로 넘어가기 전 1~2.5초 랜덤 숨고르기
+    if (!cancelRequested) {
+      await randomDelay(1100, 2500, () => cancelRequested);
     }
   }
 

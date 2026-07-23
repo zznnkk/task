@@ -95,6 +95,9 @@ async function ewangmartSearchCrawl({ browserView, searchTerm, isCancelled }) {
     })();
   `);
 
+  // ↓ 임시 디버그
+  console.log("[ewangmart] items =", JSON.stringify(items, null, 2));
+
   if (isCancelled()) {
     return null;
   }

@@ -128,6 +128,84 @@ const GRID_MAX_COLS = 100;
 
 let spreadsheetInstance = null;
 
+
+// 따옴표 규칙을 인식하는 TSV 파서. 엑셀은 셀 내용에 탭/줄바꿈/큰따옴표가 있으면
+// 그 셀 전체를 "..."로 감싸고 내부 따옴표는 ""로 이스케이프해서 클립보드에 싣는다.
+// 이 규칙을 모르고 무조건 \t, \n 기준으로 자르면 따옴표 있는 셀이 엉뚱하게 잘린다.
+function parseTsv(text) {
+    const rows = [];
+    let row = [];
+    let field = "";
+    let inQuotes = false;
+    let i = 0;
+
+    while (i < text.length) {
+        const char = text[i];
+
+        if (inQuotes) {
+            if (char === '"') {
+                if (text[i + 1] === '"') {
+                    field += '"';
+                    i += 2;
+                    continue;
+                }
+                inQuotes = false;
+                i++;
+                continue;
+            }
+            field += char;
+            i++;
+            continue;
+        }
+
+        if (char === '"' && field === "") {
+            inQuotes = true;
+            i++;
+            continue;
+        }
+
+        if (char === "\t") {
+            row.push(field);
+            field = "";
+            i++;
+            continue;
+        }
+
+        if (char === "\n") {
+            row.push(field);
+            rows.push(row);
+            row = [];
+            field = "";
+            i++;
+            continue;
+        }
+
+        field += char;
+        i++;
+    }
+
+    row.push(field);
+    rows.push(row);
+
+    return rows;
+}
+
+// 파싱된 행/셀 배열을 다시 TSV 텍스트로 합친다.
+// 셀 내용에 탭/줄바꿈/따옴표가 있으면 다시 따옴표로 감싸서 이스케이프한다.
+function stringifyTsv(rows) {
+    return rows
+        .map((cells) =>
+            cells
+                .map((cell) => {
+                    const needsQuote = /[\t\n"]/.test(cell);
+                    return needsQuote ? `"${cell.replace(/"/g, '""')}"` : cell;
+                })
+                .join("\t")
+        )
+        .join("\n");
+}
+
+
 // 붙여넣기 텍스트(TSV)를 남은 행/열 범위에 맞게 잘라낸다.
 // colIndex/rowIndex는 붙여넣기가 시작되는 셀의 0-based 위치.
 function clampPasteText(copiedText, colIndex, rowIndex) {
@@ -146,23 +224,17 @@ function clampPasteText(copiedText, colIndex, rowIndex) {
         return false;
     }
 
-    let rows = copiedText.replace(/\r/g, "").split("\n");
+    let rows = parseTsv(copiedText.replace(/\r/g, ""));
 
     if (rows.length > availableRows) {
         rows = rows.slice(0, availableRows);
     }
 
-    rows = rows.map((line) => {
-        let cells = line.split("\t");
+    rows = rows.map((cells) =>
+        cells.length > availableCols ? cells.slice(0, availableCols) : cells
+    );
 
-        if (cells.length > availableCols) {
-            cells = cells.slice(0, availableCols);
-        }
-
-        return cells.join("\t");
-    });
-
-    return rows.join("\n");
+    return stringifyTsv(rows);
 }
 
 // 수동 삽입(우클릭 메뉴, 스페이스/탭 키)으로 최대 행/열을 넘지 않도록 차단.
