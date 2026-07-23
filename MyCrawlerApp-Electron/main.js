@@ -245,8 +245,13 @@ ipcMain.handle("crawl:start", async (event, id, searchTerms) => {
     }
 
     if (value !== null) {
+      // A열(0)은 검색어 전용이라, 버튼의 로딩 순서(=파일명 순서)에 맞춰
+      // B열(1)부터 고정으로 배정한다. 예: 01_foodspring -> 1(B), 06_dadammol -> 6(G)
+      const colIndex = buttons.indexOf(target) + 1;
+
       mainWindow.webContents.send("crawl:progress", {
         rowIndex,
+        colIndex,
         text: `${target.name}|${value}`
       });
     }

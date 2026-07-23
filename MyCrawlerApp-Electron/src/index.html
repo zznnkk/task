@@ -303,30 +303,28 @@ function collectSearchTerms() {
     return terms;
 }
 
-// 해당 행에서 값이 비어있는 첫 번째 열을 찾아 텍스트를 채운다.
-// 열이 부족하면(최대치 이내에서) 새로 늘린다.
-function appendToRow(rowIndex, text) {
-    let colIndex = 0;
-
-    while (colIndex < spreadsheetInstance.headers.length) {
-        const value = spreadsheetInstance.getValueFromCoords(colIndex, rowIndex);
-        const isEmpty = value === null || value === undefined || String(value).trim() === "";
-
-        if (isEmpty) {
-            break;
-        }
-
-        colIndex++;
-    }
-
-    if (colIndex >= spreadsheetInstance.headers.length) {
+// 그리드 열 개수가 minColCount보다 적으면 필요한 만큼 끝에 열을 추가한다.
+// (jspreadsheet의 insertColumn은 columnRecordIndex를 안 주면 맨 끝에 추가됨)
+function ensureColumnCount(minColCount) {
+    while (spreadsheetInstance.headers.length < minColCount) {
         if (spreadsheetInstance.headers.length >= GRID_MAX_COLS) {
-            return; // 최대 열 도달 -> 더 이상 못 채움
+            return false; // 최대 열 도달 -> 더 이상 못 늘림
         }
 
         spreadsheetInstance.insertColumn(1, undefined, undefined, [
             { type: "text", width: 150 }
         ]);
+    }
+
+    return true;
+}
+
+// 지정된 (rowIndex, colIndex) 셀에 값을 직접 써넣는다.
+// 예전처럼 "이 행에서 비어있는 첫 칸"을 찾는 게 아니라, 호출하는 쪽(main.js)에서
+// 버튼(사이트)별로 고정해서 정해준 열에 그대로 쓴다.
+function setCellAt(rowIndex, colIndex, text) {
+    if (!ensureColumnCount(colIndex + 1)) {
+        return;
     }
 
     spreadsheetInstance.setValueFromCoords(colIndex, rowIndex, text);
@@ -351,8 +349,8 @@ async function init() {
         stopButton.disabled = !isCrawling;
     }
 
-    window.crawlerApi.onProgress(({ rowIndex, text }) => {
-        appendToRow(rowIndex, text);
+    window.crawlerApi.onProgress(({ rowIndex, colIndex, text }) => {
+        setCellAt(rowIndex, colIndex, text);
     });
 
     window.crawlerApi.onDone(({ stopped }) => {
