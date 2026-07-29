@@ -1,110 +1,46 @@
-const { waitForSelector, waitForJsCondition } = require("./_shared");
+const { waitForJsCondition, runUrlQuerySite } = require("./_shared");
 
-// 문자열에서 숫자만 뽑아 정수로 변환. "12,900원" -> 12900. 숫자가 없으면 NaN.
-function extractPriceNumber(text) {
-  if (!text) {
-    return NaN;
-  }
+// 장보자닷컴은 다담몰과 달리 "원"이 붙어있는 형식 (확인 완료)
+const PRICE_REGEX = /^[0-9][0-9,]*원$/;
 
-  const digits = text.match(/[0-9]+/g);
-
-  return digits ? parseInt(digits.join(""), 10) : NaN;
+// (1)(2)(3): URL 자체가 접속+검색을 겸함. 공백은 그대로 두고 URL 인코딩만.
+function buildUrl(cleanedTerm) {
+  return `https://jangboja.com/goods/searchItemList?keyword=${encodeURIComponent(cleanedTerm)}`;
 }
 
-// 장보자닷컴: 낮은가격순 정렬 기능이 없는 사이트라, 검색 결과 1페이지의 상품을
-// 전부 가져온 뒤 검색어 조건(쌍따옴표=포함, 물결표=제외)에 맞는 것만 추려서
-// Node 쪽에서 직접 가격을 비교해 최저가를 찾는다.
-async function jangbojaSearchCrawl({ browserView, searchTerm, isCancelled }) {
-  const wc = browserView.webContents;
+// (5): 상품 목록이 존재 + 첫 번째 요소의 가격이 완성된 포맷일 것
+function isReady(wc) {
+  return waitForJsCondition(
+    wc,
+    `
+      (function () {
+        const priceRegex = ${PRICE_REGEX};
+        const items = document.querySelectorAll("div#search-result-display div.item-box ul li");
 
-  if (isCancelled()) {
-    return null;
-  }
+        if (items.length === 0) {
+          return false;
+        }
 
-  await wc.loadURL("https://www.jangboja.com/");
+        const priceEl = items[0].querySelector("div.current-price");
 
-  if (isCancelled()) {
-    return null;
-  }
+        return !!(priceEl && priceRegex.test(priceEl.textContent.trim()));
+      })();
+    `,
+    { timeout: 5000 }
+  );
+}
 
-  // searchTerm 에서 쌍따옴표, 물결표 제거, 물결표 사이 값도 같이 제거
-
-  const searched = await wc.executeJavaScript(`
+// (7): 상품명/상품가격 크롤링
+function extractItems(wc) {
+  return wc.executeJavaScript(`
     (function () {
-      const input = document.querySelector('input#searchInput');
+      const rows = Array.from(
+        document.querySelectorAll("div#search-result-display div.item-box ul li")
+      );
 
-      if (!input) {
-        return false;
-      }
-
-      // 리액트 기반 사이트는 input.value = ... 로 바로 대입하면
-      // 리액트 내부 상태가 값 변경을 못 감지하는 경우가 있어서,
-      // 네이티브 input의 value setter를 직접 호출해 우회한다.
-      const nativeSetter = Object.getOwnPropertyDescriptor(
-        window.HTMLInputElement.prototype,
-        "value"
-      ).set;
-
-      input.focus();
-      // searchTerm 에서 쌍따옴표, 물결표 제거, 물결표 사이 값도 같이 제거
-      nativeSetter.call(input, ${JSON.stringify(  searchTerm.replace(/"/g, "").replace(/~.*?~/g, "")  )});
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-
-      const searchButton = document.querySelector('button.btn-search-big');
-
-      if (!searchButton) {
-        return false;
-      }
-
-      searchButton.click();
-      return true;
-    })();
-  `);
-
-  if (!searched) {
-    return "(검색창을 찾을 수 없음)";
-  }
-
-  if (isCancelled()) {
-    return null;
-  }
-
-  // 검색 결과의 상품 목록이 나타날 때까지 폴링 대기
-  await waitForSelector(wc, "div.product-info");
-
-  if (isCancelled()) {
-    return null;
-  }
-
-  // div.current-price 중 하나라도 완전히 "#,##0원" 형식으로 채워질 때까지 대기.
-  // 요소는 먼저 나타나도 가격 숫자가 비동기로 뒤늦게 채워지는 경우가 있어서,
-  // "존재"가 아니라 "포맷이 완성됐는지"를 봐야 제대로 된 값을 읽을 수 있다.
-  const priceLoaded = await waitForJsCondition(wc, `
-    (function () {
-      const priceRegex = /^[0-9][0-9,]*원$/;
-      const prices = Array.from(document.querySelectorAll("div.product-info div.current-price"));
-      return prices.some((el) => priceRegex.test(el.textContent.trim()));
-    })();
-  `);
-
-  if (!priceLoaded) {
-    return "(가격 로딩 실패)";
-  }
-
-  if (isCancelled()) {
-    return null;
-  }
-
-  // 목록이 완전히 다 그려질 시간을 조금 준다.
-  await new Promise((resolve) => setTimeout(resolve, 500));
-
-  const items = await wc.executeJavaScript(`
-    (function () {
-      const boxes = Array.from(document.querySelectorAll("div.product-info"));
-
-      return boxes.map((box) => {
-        const nameEl = box.querySelector("a.product-title");
-        const priceEl = box.querySelector("div.current-price");
+      return rows.map((el) => {
+        const nameEl = el.querySelector("a.product-title");
+        const priceEl = el.querySelector("div.current-price");
 
         return {
           name: nameEl ? nameEl.textContent.trim() : "",
@@ -113,41 +49,28 @@ async function jangbojaSearchCrawl({ browserView, searchTerm, isCancelled }) {
       });
     })();
   `);
+}
 
-  if (isCancelled()) {
-    return null;
-  }
+async function crawl({ browserView, searchTerm, isCancelled }) {
+  const wc = browserView.webContents;
 
-  // 키워드 중 쌍따옴표를 모두 포함하고, 물결표를 모두 제외한 상품들만 후보로 남긴다.
-  const keywords = searchTerm.trim().split(" ").filter(Boolean);
+  // Electron 기본 UA(...Electron/43.x...) 감지로 인한 차단이나 다른 레이아웃
+  // 노출을 방지하기 위해 매 크롤링 시작 전에 일반 크롬 UA로 덮어씀.
+  wc.setUserAgent(
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+  );
 
-  const mustHave = keywords.filter((x) => x.startsWith('"') && x.endsWith('"')).map((y) => y.replace(/"/g, ""));
-  const mustNotHave = keywords.filter((x) => x.startsWith('~') && x.endsWith('~')).map((y) => y.replace(/~/g, ""));
-
-  const candidates = items
-    .filter((item) =>
-      mustHave.every((keyword) => item.name.toLowerCase().includes(keyword.toLowerCase()))
-      && mustNotHave.every((keyword) => !item.name.toLowerCase().includes(keyword.toLowerCase()))
-    )
-    .map((item) => ({
-      name: item.name,
-      price: extractPriceNumber(item.priceText)
-    }))
-    .filter((item) => !Number.isNaN(item.price));
-
-  if (candidates.length === 0) {
-    return "(결과 없음)";
-  }
-
-  // 정렬 기능이 없으므로 후보들 중 최저가를 직접 계산
-  const cheapest = candidates.reduce((min, cur) => (cur.price < min.price ? cur : min));
-
-  // #,##0원 형식으로 변환
-  return `${cheapest.price.toLocaleString("ko-KR")}원`;
+  return runUrlQuerySite(wc, searchTerm, isCancelled, {
+    buildUrl, // (1)(2)(3)
+    afterLoadDelayMs: [1000, 1500], // (4)
+    isReady, // (5)
+    extractItems, // (7)
+    priceRegex: PRICE_REGEX // (7)(8)
+  });
 }
 
 module.exports = {
   id: "jangboja",
   name: "장보자닷컴",
-  crawl: jangbojaSearchCrawl
+  crawl
 };

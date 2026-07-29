@@ -1,91 +1,49 @@
-const { waitForSelector } = require("./_shared");
+const { waitForJsCondition, runUrlQuerySite } = require("./_shared");
 
-// 문자열에서 숫자만 뽑아 정수로 변환. "12,900원" -> 12900. 숫자가 없으면 NaN.
-function extractPriceNumber(text) {
-  if (!text) {
-    return NaN;
-  }
+const PRICE_REGEX = /^[0-9][0-9,]*원$/;
 
-  const digits = text.match(/[0-9]+/g);
+// (1)(2)(3): URL 자체가 접속+검색을 겸함. 공백은 "+"로 연결, 토큰별 URL 인코딩.
+function buildUrl(cleanedTerm) {
+  const keyword = cleanedTerm
+    .split(" ")
+    .filter(Boolean)
+    .map((part) => encodeURIComponent(part))
+    .join("+");
 
-  return digits ? parseInt(digits.join(""), 10) : NaN;
+  return `https://www.ewangmart.com/goods/search.do?sword=${keyword}`;
 }
 
-// 식자재왕: 낮은가격순 정렬 기능이 없는 사이트라, 검색 결과 1페이지의 상품을
-// 전부 가져온 뒤 검색어 조건(쌍따옴표=포함, 물결표=제외)에 맞는 것만 추려서
-// Node 쪽에서 직접 가격을 비교해 최저가를 찾는다.
-async function ewangmartSearchCrawl({ browserView, searchTerm, isCancelled }) {
-  const wc = browserView.webContents;
+// (5): 상품 목록이 존재 + 첫 번째 요소의 sale-price가 가격 포맷일 것
+function isReady(wc) {
+  return waitForJsCondition(
+    wc,
+    `
+      (function () {
+        const priceRegex = ${PRICE_REGEX};
+        const items = document.querySelectorAll("div.goods-list li.goods-item");
 
-  if (isCancelled()) {
-    return null;
-  }
+        if (items.length === 0) {
+          return false;
+        }
 
-  await wc.loadURL("https://www.ewangmart.com/");
+        const priceEl = items[0].querySelector("span.sale-price");
 
-  if (isCancelled()) {
-    return null;
-  }
+        return !!(priceEl && priceRegex.test(priceEl.textContent.trim()));
+      })();
+    `,
+    { timeout: 5000 }
+  );
+}
 
-  // searchTerm 에서 쌍따옴표, 물결표 제거, 물결표 사이 값도 같이 제거
-
-  const searched = await wc.executeJavaScript(`
+// (7): 상품명/상품가격 크롤링
+function extractItems(wc) {
+  return wc.executeJavaScript(`
     (function () {
-      const input = document.querySelector('input.input-search');
+      const rows = Array.from(document.querySelectorAll("div.goods-list li.goods-item"));
 
-      if (!input) {
-        return false;
-      }
-
-      // 리액트 기반 사이트는 input.value = ... 로 바로 대입하면
-      // 리액트 내부 상태가 값 변경을 못 감지하는 경우가 있어서,
-      // 네이티브 input의 value setter를 직접 호출해 우회한다.
-      const nativeSetter = Object.getOwnPropertyDescriptor(
-        window.HTMLInputElement.prototype,
-        "value"
-      ).set;
-
-      input.focus();
-      // searchTerm 에서 쌍따옴표, 물결표 제거, 물결표 사이 값도 같이 제거
-      nativeSetter.call(input, ${JSON.stringify(  searchTerm.replace(/"/g, "").replace(/~.*?~/g, "")  )});
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-
-      const searchButton = document.querySelector('button.button-search');
-
-      if (!searchButton) {
-        return false;
-      }
-
-      searchButton.click();
-      return true;
-    })();
-  `);
-
-  if (!searched) {
-    return "(검색창을 찾을 수 없음)";
-  }
-
-  if (isCancelled()) {
-    return null;
-  }
-
-  // 검색 결과의 상품 목록이 나타날 때까지 폴링 대기
-  await waitForSelector(wc, "a.goods-info-box-link");
-
-  if (isCancelled()) {
-    return null;
-  }
-
-  // 목록이 완전히 다 그려질 시간을 조금 준다.
-  await new Promise((resolve) => setTimeout(resolve, 500));
-
-  const items = await wc.executeJavaScript(`
-    (function () {
-      const anchors = Array.from(document.querySelectorAll("a.goods-info-box-link"));
-
-      return anchors.map((anchor) => {
-        const nameEl = anchor.querySelector("span.goods-title");
-        const priceEl = anchor.querySelector("span.sale-price");
+      return rows.map((el) => {
+        const nameEl = el.querySelector("span.goods-title");
+        const priceEl = el.querySelector("span.sale-price");
 
         return {
           name: nameEl ? nameEl.textContent.trim() : "",
@@ -94,44 +52,28 @@ async function ewangmartSearchCrawl({ browserView, searchTerm, isCancelled }) {
       });
     })();
   `);
+}
 
-  // ↓ 임시 디버그
-  console.log("[ewangmart] items =", JSON.stringify(items, null, 2));
+async function crawl({ browserView, searchTerm, isCancelled }) {
+  const wc = browserView.webContents;
 
-  if (isCancelled()) {
-    return null;
-  }
+  // Electron 기본 UA(...Electron/43.x...) 감지로 인한 차단이나 다른 레이아웃
+  // 노출을 방지하기 위해 매 크롤링 시작 전에 일반 크롬 UA로 덮어씀.
+  wc.setUserAgent(
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+  );
 
-  // 키워드 중 쌍따옴표를 모두 포함하고, 물결표를 모두 제외한 상품들만 후보로 남긴다.
-  const keywords = searchTerm.trim().split(" ").filter(Boolean);
-
-  const mustHave = keywords.filter((x) => x.startsWith('"') && x.endsWith('"')).map((y) => y.replace(/"/g, ""));
-  const mustNotHave = keywords.filter((x) => x.startsWith('~') && x.endsWith('~')).map((y) => y.replace(/~/g, ""));
-
-  const candidates = items
-    .filter((item) =>
-      mustHave.every((keyword) => item.name.toLowerCase().includes(keyword.toLowerCase()))
-      && mustNotHave.every((keyword) => !item.name.toLowerCase().includes(keyword.toLowerCase()))
-    )
-    .map((item) => ({
-      name: item.name,
-      price: extractPriceNumber(item.priceText)
-    }))
-    .filter((item) => !Number.isNaN(item.price));
-
-  if (candidates.length === 0) {
-    return "(결과 없음)";
-  }
-
-  // 정렬 기능이 없으므로 후보들 중 최저가를 직접 계산
-  const cheapest = candidates.reduce((min, cur) => (cur.price < min.price ? cur : min));
-
-  // #,##0원 형식으로 변환
-  return `${cheapest.price.toLocaleString("ko-KR")}원`;
+  return runUrlQuerySite(wc, searchTerm, isCancelled, {
+    buildUrl, // (1)(2)(3)
+    afterLoadDelayMs: [1000, 1500], // (4)
+    isReady, // (5)
+    extractItems, // (7)
+    priceRegex: PRICE_REGEX // (7)(8)
+  });
 }
 
 module.exports = {
   id: "ewangmart",
   name: "식자재왕",
-  crawl: ewangmartSearchCrawl
+  crawl
 };

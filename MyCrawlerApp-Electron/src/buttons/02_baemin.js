@@ -1,148 +1,82 @@
-const { waitForSelector, clickButtonWhenReady } = require("./_shared");
+const { waitForJsCondition, runUrlQuerySite } = require("./_shared");
 
-// 배민상회: 검색어 입력 -> 낮은가격순 정렬 -> 검색어 키워드를 모두 포함하는
-// 첫 번째(=최저가) 상품의 가격을 찾아 리턴.
-async function baeminSearchCrawl({ browserView, searchTerm, isCancelled }) {
-  const wc = browserView.webContents;
+const PRICE_REGEX = /^[0-9][0-9,]*원$/;
 
-  if (isCancelled()) {
-    return null;
-  }
+// (1)(2)(3): URL 자체가 접속+검색을 겸함. 공백은 그대로 두고 URL 인코딩만.
+function buildUrl(cleanedTerm) {
+  return `https://mart.baemin.com/search/result?p=0&s=BASIC_A&w=${encodeURIComponent(cleanedTerm)}`;
+}
 
-  await wc.loadURL("https://mart.baemin.com/");
-
-  if (isCancelled()) {
-    return null;
-  }
-
-  // serchTerm 에서 쌍따옴표, 물결표 제거, 물결표 사이 값도 같이 제거
-
-  const searched = await wc.executeJavaScript(`
-    (function () {
-      const input = document.querySelector('input[name="search input"]');
-
-      if (!input) {
-        return false;
-      }
-
-      // 리액트 기반 사이트는 input.value = ... 로 바로 대입하면
-      // 리액트 내부 상태가 값 변경을 못 감지하는 경우가 있어서,
-      // 네이티브 input의 value setter를 직접 호출해 우회한다.
-      const nativeSetter = Object.getOwnPropertyDescriptor(
-        window.HTMLInputElement.prototype,
-        "value"
-      ).set;
-
-      input.focus();
-      // serchTerm 에서 쌍따옴표, 물결표 제거, 물결표 사이 값도 같이 제거
-      nativeSetter.call(input, ${JSON.stringify(  searchTerm.replace(/"/g, "").replace(/~.*?~/g, "")  )});  
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-
-      // input과 형제 관계에 있는 돋보기(검색) 버튼을 찾아 클릭
-      const container = input.parentElement;
-      const searchButton = container ? container.querySelector("button") : null;
-
-      if (!searchButton) {
-        return false;
-      }
-
-      searchButton.click();
-      return true;
-    })();
-  `);
-
-  if (!searched) {
-    return "(검색창을 찾을 수 없음)";
-  }
-
-  if (isCancelled()) {
-    return null;
-  }
-
-  // SPA라 페이지 전체 이동이 없으므로, 검색 반영 및 정렬 버튼이 나타날 때까지 폴링 대기
-  await waitForSelector(wc, "button");
-
-  if (isCancelled()) {
-    return null;
-  }
-
-  // "낮은가격순" 버튼이 실제로 나타날 때까지 기다렸다가 나타나는 즉시 클릭
-  const sorted = await clickButtonWhenReady(wc, "낮은가격순");
-
-  if (!sorted) {
-    return "(정렬 버튼을 찾을 수 없음)";
-  }
-
-  if (isCancelled()) {
-    return null;
-  }
-
-  // 정렬 후 목록이 다시 그려질 시간을 조금 준다.
-  await new Promise((resolve) => setTimeout(resolve, 1000));
-  await waitForSelector(wc, "a[data-card-size]");
-
-  if (isCancelled()) {
-    return null;
-  }
-
-  const items = await wc.executeJavaScript(`
-    (function () {
-      function nthChildOfTag(parent, tag, n) {
-        if (!parent) {
-          return null;
-        }
-
-        const children = Array.from(parent.children).filter(
-          (el) => el.tagName.toLowerCase() === tag
+// (5): 카드 2단계 아래 컨테이너들이 존재 + 첫 번째 요소 밑 span 중 하나라도 가격 포맷일 것
+function isReady(wc) {
+  return waitForJsCondition(
+    wc,
+    `
+      (function () {
+        const priceRegex = ${PRICE_REGEX};
+        const items = document.querySelectorAll(
+          'div[data-testid] a[data-card-size] > div:nth-child(2) > div:nth-child(2)'
         );
 
-        return children[n - 1] || null;
-      }
+        if (items.length === 0) {
+          return false;
+        }
 
-      const anchors = Array.from(document.querySelectorAll("div[data-testid] a[data-card-size]"));
+        const spans = Array.from(items[0].querySelectorAll("span"));
 
-      return anchors.map((anchor) => {
-        const secondDiv = nthChildOfTag(anchor, "div", 2);
+        return spans.some((s) => priceRegex.test(s.textContent.trim()));
+      })();
+    `,
+    { timeout: 5000 }
+  );
+}
 
-        const nameDiv = nthChildOfTag(secondDiv, "div", 1);
-        const nameEl = nameDiv ? nameDiv.querySelector("p") : null;
-        const name = nameEl ? nameEl.textContent.trim() : "";
+// (7): 상품명은 카드의 첫 번째 자식 div, 가격은 두 번째 자식 div 아래 span 중
+// 가격 포맷을 만족하는 첫 번째 span
+function extractItems(wc) {
+  return wc.executeJavaScript(`
+    (function () {
+      const priceRegex = ${PRICE_REGEX};
+      const rows = Array.from(
+        document.querySelectorAll('div[data-testid] a[data-card-size] > div:nth-child(2)')
+      );
 
-        const priceOuterDiv = nthChildOfTag(secondDiv, "div", 2);
-        const priceDiv = priceOuterDiv ? priceOuterDiv.querySelector("div") : null;
-        const priceFirstDiv = nthChildOfTag(priceDiv, "div", 1);
+      return rows.map((el) => {
+        const nameEl = el.querySelector(":scope > div:nth-child(1)");
+        const priceContainer = el.querySelector(":scope > div:nth-child(2)");
+        const spans = priceContainer ? Array.from(priceContainer.querySelectorAll("span")) : [];
+        const priceSpan = spans.find((s) => priceRegex.test(s.textContent.trim()));
 
-        const priceRegex = /[0-9,]+원$/;
-        const spans = priceFirstDiv ? Array.from(priceFirstDiv.querySelectorAll("span")) : [];
-        const priceSpan = spans.find((span) => priceRegex.test(span.textContent.trim()));
-        const price = priceSpan ? priceSpan.textContent.trim() : "";
-
-        return { name, price };
+        return {
+          name: nameEl ? nameEl.textContent.trim() : "",
+          priceText: priceSpan ? priceSpan.textContent.trim() : ""
+        };
       });
     })();
   `);
+}
 
-  if (isCancelled()) {
-    return null;
-  }
+async function crawl({ browserView, searchTerm, isCancelled }) {
+  const wc = browserView.webContents;
 
-  // items는 이미 "낮은가격순"으로 정렬된 순서 그대로이므로,
-  // 키워드 중 쌍따옴표를 모두 포함하고, 물결표를 모두 제외한 첫 번째 상품 = 최저가 상품이다.
-  const keywords = searchTerm.trim().split(" ").filter(Boolean);
-
-  const mustHave = keywords.filter((x) => x.startsWith('"') && x.endsWith('"')).map((y) => y.replace(/"/g, ""));
-  const mustNotHave = keywords.filter((x) => x.startsWith('~') && x.endsWith('~')).map((y) => y.replace(/~/g, ""));
-
-  const matched = items.find((item) =>
-    mustHave.every((keyword) => item.name.toLowerCase().includes(keyword.toLowerCase()))
-    && mustNotHave.every((keyword) => !item.name.toLowerCase().includes(keyword.toLowerCase()))
+  // Electron 기본 UA(...Electron/43.x...)를 감지해서 다른 레이아웃(또는 다른 처리)을
+  // 내려주는 사이트가 있을 수 있어서(쿠팡 UA 차단 이슈와 유사한 패턴), 매 크롤링
+  // 시작 전에 일반 크롬 UA로 덮어씀.
+  wc.setUserAgent(
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
   );
 
-  return matched ? matched.price : "(결과 없음)";
+  return runUrlQuerySite(wc, searchTerm, isCancelled, {
+    buildUrl, // (1)(2)(3)
+    afterLoadDelayMs: [1000, 1500], // (4)
+    isReady, // (5)
+    extractItems, // (7)
+    priceRegex: PRICE_REGEX // (7)(8)
+  });
 }
 
 module.exports = {
   id: "baemin",
   name: "배민상회",
-  crawl: baeminSearchCrawl
+  crawl
 };
