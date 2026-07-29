@@ -49,11 +49,6 @@ body {
     gap: 8px;
 }
 
-/* #buttons 자체는 박스를 갖지 않고 자식 버튼들이 .button-row에 바로 속하게 함 */
-#buttons {
-    display: contents;
-}
-
 button {
     height: 36px;
     padding: 0 16px;
@@ -93,6 +88,12 @@ button:disabled {
     border: 1px solid #ddd;
     white-space: pre-wrap;
 }
+
+.site-order {
+    margin-top: 10px;
+    font-size: 13px;
+    color: #666;
+}
 </style>
 </head>
 
@@ -103,10 +104,11 @@ button:disabled {
         <h2>컨트롤 패널</h2>
 
         <div class="button-row">
-            <div id="buttons"></div>
-
+            <button id="searchButton">▶ 검색</button>
             <button id="stopButton" disabled>■ 중단</button>
         </div>
+
+        <div id="siteOrder" class="site-order"></div>
 
         <pre id="result">결과 대기 중...</pre>
     </div>
@@ -122,7 +124,7 @@ button:disabled {
 <script>
 // ── 그리드 설정 ──────────────────────────────
 const GRID_MIN_ROWS = 100;
-const GRID_MIN_COLS = 2;
+const GRID_MIN_COLS = 1; // A열(검색어)만 초기 노출, 나머지는 결과 들어올 때 자동 확장
 const GRID_MAX_ROWS = 1000;
 const GRID_MAX_COLS = 100;
 
@@ -285,7 +287,9 @@ initGrid();
 <script>
 // 스프레드시트 1열(가장 왼쪽 열)을 위에서부터 읽어 검색어 목록을 만든다.
 // 빈 칸을 만나면 그 지점에서 멈춘다.
-function collectSearchTerms() {
+// 각 행마다 사이트(열)별 기존 값(values)도 같이 읽어서, main.js가
+// "빈칸이거나 실패로 남은 셀만" 골라 처리할 수 있게 한다.
+function collectSearchTerms(siteCount) {
     const columnData = spreadsheetInstance.getColumnData(0);
     const terms = [];
 
@@ -297,7 +301,19 @@ function collectSearchTerms() {
             break;
         }
 
-        terms.push({ rowIndex, term: text });
+        const values = [];
+
+        for (let i = 0; i < siteCount; i++) {
+            const colIndex = i + 1; // A열(0)은 검색어 전용
+
+            values.push(
+                colIndex < spreadsheetInstance.headers.length
+                    ? spreadsheetInstance.getValueFromCoords(colIndex, rowIndex)
+                    : null
+            );
+        }
+
+        terms.push({ rowIndex, term: text, values });
     }
 
     return terms;
@@ -337,15 +353,13 @@ function setCellAt(rowIndex, colIndex, text) {
 }
 
 async function init() {
-    const buttonArea = document.getElementById("buttons");
-    const resultArea = document.getElementById("result");
+    const searchButton = document.getElementById("searchButton");
     const stopButton = document.getElementById("stopButton");
+    const resultArea = document.getElementById("result");
+    const siteOrderArea = document.getElementById("siteOrder");
 
     function setCrawlingState(isCrawling) {
-        buttonArea.querySelectorAll("button").forEach((btn) => {
-            btn.disabled = isCrawling;
-        });
-
+        searchButton.disabled = isCrawling;
         stopButton.disabled = !isCrawling;
     }
 
@@ -365,34 +379,35 @@ async function init() {
         await window.crawlerApi.stopCrawl();
     });
 
-    const buttons = await window.crawlerApi.getButtons();
+    // 버튼 로딩 순서(=src/buttons 파일명 순서) 그대로가 크롤링 순서이자 열 배정 순서
+    const siteButtons = await window.crawlerApi.getButtons();
 
-    buttons.forEach((item) => {
-        const button = document.createElement("button");
+    siteOrderArea.textContent =
+        "크롤링 대상 사이트 및 순서: " + siteButtons.map((b) => b.name).join(" → ");
 
-        button.id = item.id;
-        button.textContent = item.name;
+    searchButton.addEventListener("click", async () => {
+        const searchTerms = collectSearchTerms(siteButtons.length);
 
-        button.addEventListener("click", async () => {
-            const searchTerms = collectSearchTerms();
+        if (searchTerms.length === 0) {
+            resultArea.textContent = "그리드 1열에 검색어가 없습니다.";
+            return;
+        }
 
-            if (searchTerms.length === 0) {
-                resultArea.textContent = "그리드 1열에 검색어가 없습니다.";
-                return;
-            }
+        resultArea.textContent = `크롤링 실행 중... (검색어 ${searchTerms.length}개 x 사이트 ${siteButtons.length}개)`;
+        setCrawlingState(true);
 
-            resultArea.textContent = `${item.name} 크롤링 실행 중... (총 ${searchTerms.length}개)`;
-            setCrawlingState(true);
+        try {
+            const res = await window.crawlerApi.startCrawl(searchTerms);
 
-            try {
-                await window.crawlerApi.startCrawl(item.id, searchTerms);
-            } catch (err) {
-                resultArea.textContent = err.message;
+            if (res && res.nothingToDo) {
                 setCrawlingState(false);
+                resultArea.textContent = "더 이상 크롤링을 진행할 수 없습니다.";
             }
-        });
-
-        buttonArea.appendChild(button);
+            // 정상 진행된 경우엔 onDone 콜백에서 최종 상태를 표시함
+        } catch (err) {
+            resultArea.textContent = err.message;
+            setCrawlingState(false);
+        }
     });
 }
 

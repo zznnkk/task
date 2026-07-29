@@ -201,16 +201,82 @@ ipcMain.handle("buttons:list", async () => {
   return buttons.map(({ crawl, ...button }) => button);
 });
 
-// searchTerms: [{ rowIndex, term }, ...] (렌더러에서 그리드 1열을 읽어 만들어 전달)
-ipcMain.handle("crawl:start", async (event, id, searchTerms) => {
+// 결과값이 "숫자,콤마원" 형식(예: "12,900원")인지 확인
+function isPriceText(text) {
+  return typeof text === "string" && /^[0-9][0-9,]*원$/.test(text);
+}
+
+// 셀에 저장된 "이름|결과" 텍스트에서 "결과" 부분만 뽑아낸다.
+// "|"가 없으면(예전 형식이거나 값 자체) 그대로 반환.
+function extractResultPart(text) {
+  if (typeof text !== "string") {
+    return text;
+  }
+
+  const sepIndex = text.indexOf("|");
+
+  return sepIndex === -1 ? text : text.slice(sepIndex + 1);
+}
+
+// 사이트 crawl()이 반환한 값을 "가격" / "(결과 없음)" / "(크롤링실패)" 셋 중 하나로 정규화.
+// 실패 사유(요소못찾음/차단/타임아웃 등)를 세세히 구분하지 않고 전부 "(크롤링실패)"로
+// 묶는다 - 재시도 여부를 가르는 기준은 "검색이 끝까지 됐는지"뿐이라 이걸로 충분함.
+function normalizeCrawlResult(value) {
+  if (value === "(결과 없음)") {
+    return value;
+  }
+
+  if (isPriceText(value)) {
+    return value;
+  }
+
+  return "(크롤링실패)";
+}
+
+// 셀에 저장된 값이 "다시 크롤링해야 하는 상태"인지 확인.
+// 유효한 가격이 아니면(빈칸/"(결과 없음)"/"(크롤링실패)"/그 외 전부) 재처리 대상.
+function needsProcessing(value) {
+  if (value === null || value === undefined) {
+    return true;
+  }
+
+  const text = String(value).trim();
+
+  if (text === "") {
+    return true;
+  }
+
+  return !isPriceText(extractResultPart(text));
+}
+
+// searchTerms: [{ rowIndex, term, values }, ...]
+// values[i]는 buttons[i](=해당 사이트 열)에 현재 들어있는 값 (렌더러가 그리드에서 읽어 전달)
+ipcMain.handle("crawl:start", async (event, searchTerms) => {
   if (isCrawling) {
     throw new Error("이미 크롤링이 진행 중입니다.");
   }
 
-  const target = buttons.find((button) => button.id === id);
+  // 검색어(행) x 사이트(열) 조합 중, 빈칸이거나 실패로 남아있는 것만 골라낸다.
+  const workItems = [];
 
-  if (!target) {
-    throw new Error(`알 수 없는 버튼 id: ${id}`);
+  for (const { rowIndex, term, values } of searchTerms) {
+    const siteIndexes = [];
+
+    for (let i = 0; i < buttons.length; i++) {
+      const existing = values ? values[i] : undefined;
+
+      if (needsProcessing(existing)) {
+        siteIndexes.push(i);
+      }
+    }
+
+    if (siteIndexes.length > 0) {
+      workItems.push({ rowIndex, term, siteIndexes });
+    }
+  }
+
+  if (workItems.length === 0) {
+    return { stopped: false, nothingToDo: true };
   }
 
   isCrawling = true;
@@ -220,45 +286,61 @@ ipcMain.handle("crawl:start", async (event, id, searchTerms) => {
 
   let stopped = false;
 
-  for (const { rowIndex, term } of searchTerms) {
-    if (cancelRequested) {
-      stopped = true;
-      break;
-    }
+  // 바로 직전에 크롤링한 사이트의 인덱스. 이번에 크롤링할 사이트가 이거랑 같으면
+  // (예: 실패/결과없음만 남은 두 행이 연달아 같은 사이트로 몰리는 경우) 대기 후 진행.
+  let lastSiteIndex = null;
 
-    let value;
+  // 검색어(a) 하나를 두고 -> 사이트 순서대로(1~7) 전부 돈 뒤 -> 다음 검색어(b)로.
+  // 같은 사이트를 다시 찾기까지 나머지 사이트들 처리 시간만큼 자연스럽게 간격이 생김.
+  outer:
+  for (const { rowIndex, term, siteIndexes } of workItems) {
+    for (const siteIndex of siteIndexes) {
+      if (cancelRequested) {
+        stopped = true;
+        break outer;
+      }
 
-    try {
-      value = await target.crawl({
-        browserView,
-        mainWindow,
-        searchTerm: term,
-        isCancelled: () => cancelRequested
-      });
-    } catch (err) {
-      value = `에러: ${err.message}`;
-    }
+      // (9) 대기: 바로 직전에 크롤링한 사이트와 이번 사이트가 같을 때만
+      if (lastSiteIndex === siteIndex) {
+        await randomDelay(5000, 7000, () => cancelRequested);
 
-    if (cancelRequested) {
-      stopped = true;
-      break;
-    }
+        if (cancelRequested) {
+          stopped = true;
+          break outer;
+        }
+      }
 
-    if (value !== null) {
-      // A열(0)은 검색어 전용이라, 버튼의 로딩 순서(=파일명 순서)에 맞춰
-      // B열(1)부터 고정으로 배정한다. 예: 01_foodspring -> 1(B), 06_dadammol -> 6(G)
-      const colIndex = buttons.indexOf(target) + 1;
+      const site = buttons[siteIndex];
+      let value;
 
-      mainWindow.webContents.send("crawl:progress", {
-        rowIndex,
-        colIndex,
-        text: `${target.name}|${value}`
-      });
-    }
+      try {
+        value = await site.crawl({
+          browserView,
+          mainWindow,
+          searchTerm: term,
+          isCancelled: () => cancelRequested
+        });
+      } catch (err) {
+        value = "(크롤링실패)";
+      }
 
-    // ↓ 여기 추가: 다음 검색어로 넘어가기 전 1~2.5초 랜덤 숨고르기
-    if (!cancelRequested) {
-      await randomDelay(1100, 2500, () => cancelRequested);
+      lastSiteIndex = siteIndex;
+
+      if (cancelRequested) {
+        stopped = true;
+        break outer;
+      }
+
+      if (value !== null) {
+        const colIndex = siteIndex + 1; // A열은 검색어 전용
+        const text = `${site.name}|${normalizeCrawlResult(value)}`;
+
+        mainWindow.webContents.send("crawl:progress", {
+          rowIndex,
+          colIndex,
+          text
+        });
+      }
     }
   }
 
