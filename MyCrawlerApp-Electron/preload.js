@@ -5,8 +5,9 @@ contextBridge.exposeInMainWorld("crawlerApi", {
 
   // searchTerms: [{ rowIndex, term, values }, ...]
   // values[i] = 해당 행에서 i번째 사이트(열)에 현재 들어있는 값
-  startCrawl: (searchTerms) =>
-    ipcRenderer.invoke("crawl:start", searchTerms),
+  // checkedSiteIndexes: 체크박스로 선택된 사이트들의 인덱스 배열 (buttons 순서 기준)
+  startCrawl: (searchTerms, checkedSiteIndexes) =>
+    ipcRenderer.invoke("crawl:start", searchTerms, checkedSiteIndexes),
 
   stopCrawl: () => ipcRenderer.invoke("crawl:stop"),
 

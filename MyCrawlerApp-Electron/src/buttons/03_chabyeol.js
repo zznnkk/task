@@ -2,6 +2,11 @@ const { waitForJsCondition, runUrlQuerySite } = require("./_shared");
 
 const PRICE_REGEX = /^[0-9][0-9,]*원$/;
 
+// 상품 하나하나를 감싸는 실제 반복 요소. class에 콜론(:)이 있는 Tailwind 클래스라
+// CSS 클래스 셀렉터(a.mobile\:hidden)로 쓰면 이스케이프가 꼬이기 쉬워서,
+// 속성 선택자로 안전하게 찾음 (콜론이 그냥 문자로 취급됨).
+const ITEM_SELECTOR = 'a[class~="mobile:hidden"]';
+
 // (1)(2)(3): URL 자체가 접속+검색을 겸함. 공백은 "+"로 연결, 토큰별 URL 인코딩.
 function buildUrl(cleanedTerm) {
   const keyword = cleanedTerm
@@ -13,22 +18,25 @@ function buildUrl(cleanedTerm) {
   return `https://www.chabyulhwa.com/search?query=${keyword}`;
 }
 
-// (5): 상품 컨테이너들이 존재 + 첫 번째 요소의 원가 요소가 가격 포맷일 것
+// (5): 상품 카드(a.mobile:hidden)들이 존재 + 첫 번째 카드의 가격이 포맷을 만족할 것
 function isReady(wc) {
   return waitForJsCondition(
     wc,
     `
       (function () {
         const priceRegex = ${PRICE_REGEX};
-        const items = document.querySelectorAll(
-          'div.listing-inventory-vertical span.product-list-item-info-original-price'
-        );
+        const items = document.querySelectorAll('${ITEM_SELECTOR}');
 
         if (items.length === 0) {
           return false;
         }
 
-        return priceRegex.test(items[0].textContent.trim());
+        const first = items[0];
+        const discountEl = first.querySelector("span.product-list-item-info-discounted-price");
+        const originalEl = first.querySelector("span.product-list-item-info-original-price");
+        const priceEl = discountEl && discountEl.textContent.trim() ? discountEl : originalEl;
+
+        return !!(priceEl && priceRegex.test(priceEl.textContent.trim()));
       })();
     `,
     { timeout: 5000 }
@@ -39,7 +47,7 @@ function isReady(wc) {
 function extractItems(wc) {
   return wc.executeJavaScript(`
     (function () {
-      const rows = Array.from(document.querySelectorAll("div.listing-inventory-vertical"));
+      const rows = Array.from(document.querySelectorAll('${ITEM_SELECTOR}'));
 
       return rows.map((el) => {
         const nameEl = el.querySelector("div.product-list-item-info-title");

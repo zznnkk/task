@@ -154,11 +154,17 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
+    show: false, // 리소스 로드 전엔 숨겨둠
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false
     }
+  });
+
+  mainWindow.once("ready-to-show", () => {
+    mainWindow.maximize();
+    mainWindow.show();
   });
 
   Menu.setApplicationMenu(null);
@@ -251,18 +257,27 @@ function needsProcessing(value) {
 
 // searchTerms: [{ rowIndex, term, values }, ...]
 // values[i]는 buttons[i](=해당 사이트 열)에 현재 들어있는 값 (렌더러가 그리드에서 읽어 전달)
-ipcMain.handle("crawl:start", async (event, searchTerms) => {
+// checkedSiteIndexes: 체크박스로 선택된 사이트들의 인덱스 배열 (없으면 전체로 간주)
+ipcMain.handle("crawl:start", async (event, searchTerms, checkedSiteIndexes) => {
   if (isCrawling) {
     throw new Error("이미 크롤링이 진행 중입니다.");
   }
 
-  // 검색어(행) x 사이트(열) 조합 중, 빈칸이거나 실패로 남아있는 것만 골라낸다.
+  const checkedSet = Array.isArray(checkedSiteIndexes)
+    ? new Set(checkedSiteIndexes)
+    : new Set(buttons.map((_, i) => i));
+
+  // 검색어(행) x 사이트(열) 조합 중, 체크된 사이트이면서 빈칸이거나 실패로 남아있는 것만 골라낸다.
   const workItems = [];
 
   for (const { rowIndex, term, values } of searchTerms) {
     const siteIndexes = [];
 
     for (let i = 0; i < buttons.length; i++) {
+      if (!checkedSet.has(i)) {
+        continue;
+      }
+
       const existing = values ? values[i] : undefined;
 
       if (needsProcessing(existing)) {

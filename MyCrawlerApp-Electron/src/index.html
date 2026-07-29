@@ -89,10 +89,31 @@ button:disabled {
     white-space: pre-wrap;
 }
 
-.site-order {
+.site-list {
     margin-top: 10px;
     font-size: 13px;
+    color: #333;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 12px;
+}
+
+.site-list .site-list-label {
     color: #666;
+    margin-right: 4px;
+}
+
+.site-list label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.site-list .arrow {
+    color: #aaa;
 }
 </style>
 </head>
@@ -108,7 +129,7 @@ button:disabled {
             <button id="stopButton" disabled>■ 중단</button>
         </div>
 
-        <div id="siteOrder" class="site-order"></div>
+        <div id="siteList" class="site-list"></div>
 
         <pre id="result">결과 대기 중...</pre>
     </div>
@@ -356,11 +377,17 @@ async function init() {
     const searchButton = document.getElementById("searchButton");
     const stopButton = document.getElementById("stopButton");
     const resultArea = document.getElementById("result");
-    const siteOrderArea = document.getElementById("siteOrder");
+    const siteListArea = document.getElementById("siteList");
+
+    let siteCheckboxes = []; // 순서대로 [{ checkbox, site }]
 
     function setCrawlingState(isCrawling) {
         searchButton.disabled = isCrawling;
         stopButton.disabled = !isCrawling;
+
+        siteCheckboxes.forEach(({ checkbox }) => {
+            checkbox.disabled = isCrawling;
+        });
     }
 
     window.crawlerApi.onProgress(({ rowIndex, colIndex, text }) => {
@@ -379,13 +406,47 @@ async function init() {
         await window.crawlerApi.stopCrawl();
     });
 
-    // 버튼 로딩 순서(=src/buttons 파일명 순서) 그대로가 크롤링 순서이자 열 배정 순서
+    // 버튼 로딩 순서(=src/buttons 파일명 순서) 그대로가 크롤링 순서이자 열 배정 순서.
+    // 체크박스도 이 순서 그대로 나열하고, 처음엔 전부 체크된 상태로 시작.
     const siteButtons = await window.crawlerApi.getButtons();
 
-    siteOrderArea.textContent =
-        "크롤링 대상 사이트 및 순서: " + siteButtons.map((b) => b.name).join(" → ");
+    const labelEl = document.createElement("span");
+    labelEl.className = "site-list-label";
+    labelEl.textContent = "크롤링 대상 사이트 및 순서:";
+    siteListArea.appendChild(labelEl);
+
+    siteButtons.forEach((site, index) => {
+        if (index > 0) {
+            const arrow = document.createElement("span");
+            arrow.className = "arrow";
+            arrow.textContent = "→";
+            siteListArea.appendChild(arrow);
+        }
+
+        const label = document.createElement("label");
+        const checkbox = document.createElement("input");
+
+        checkbox.type = "checkbox";
+        checkbox.checked = true;
+        checkbox.dataset.siteIndex = String(index);
+
+        label.appendChild(checkbox);
+        label.appendChild(document.createTextNode(site.name));
+        siteListArea.appendChild(label);
+
+        siteCheckboxes.push({ checkbox, site });
+    });
 
     searchButton.addEventListener("click", async () => {
+        const checkedSiteIndexes = siteCheckboxes
+            .filter(({ checkbox }) => checkbox.checked)
+            .map(({ checkbox }) => Number(checkbox.dataset.siteIndex));
+
+        if (checkedSiteIndexes.length === 0) {
+            resultArea.textContent = "체크된 온라인몰이 없습니다.";
+            return;
+        }
+
         const searchTerms = collectSearchTerms(siteButtons.length);
 
         if (searchTerms.length === 0) {
@@ -393,11 +454,12 @@ async function init() {
             return;
         }
 
-        resultArea.textContent = `크롤링 실행 중... (검색어 ${searchTerms.length}개 x 사이트 ${siteButtons.length}개)`;
+        resultArea.textContent =
+            `크롤링 실행 중... (검색어 ${searchTerms.length}개 x 사이트 ${checkedSiteIndexes.length}개)`;
         setCrawlingState(true);
 
         try {
-            const res = await window.crawlerApi.startCrawl(searchTerms);
+            const res = await window.crawlerApi.startCrawl(searchTerms, checkedSiteIndexes);
 
             if (res && res.nothingToDo) {
                 setCrawlingState(false);
